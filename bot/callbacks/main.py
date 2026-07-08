@@ -221,13 +221,19 @@ async def cb_my_bot(client: Client, query: CallbackQuery):
         framework = dep.get("framework", "Unknown")
         url = dep.get("url", "N/A")
         runtime = time.time() - dep.get("created_at", time.time())
+
+        # Get token details and show credits
+        token_doc = await database.get_railway_token(dep["railway_token"])
+        credits_str = f"${token_doc['credits']:.2f}" if (token_doc and "credits" in token_doc) else "N/A"
+
         text = (
             f"<blockquote><b>🤖 ʏᴏᴜʀ ʙᴏᴛ</b></blockquote>\n\n"
             f"<b>📊 Status:</b> {status}\n"
             f"<b>⚙ Framework:</b> {framework}\n"
             f"<b>🌍 URL:</b> <code>{url}</code>\n"
             f"<b>⏱ Runtime:</b> {format_uptime(runtime)}\n"
-            f"<b>🔄 Restarts:</b> {dep.get('restart_count', 0)}\n\n"
+            f"<b>🔄 Restarts:</b> {dep.get('restart_count', 0)}\n"
+            f"<b>💳 Railway Credit:</b> <code>{credits_str}</code>\n\n"
             f"<i>Selected Bot: <code>{dep['deployment_id'][:8]}</code></i>"
         )
         await query.message.edit_text(text, reply_markup=my_bot_keyboard(True, dep["deployment_id"]))

@@ -404,6 +404,16 @@ class DeploymentEngine:
             }
             await database.create_deployment(dep_record)
 
+            # Save source ZIP locally for migrations
+            try:
+                zips_dir = os.path.join("data", "zips")
+                os.makedirs(zips_dir, exist_ok=True)
+                zip_save_path = os.path.join(zips_dir, f"{deployment_id}.zip")
+                with open(zip_save_path, "wb") as f:
+                    f.write(zip_data)
+            except Exception as zip_err:
+                logger.error(f"Failed to save zip backup: {zip_err}")
+
             await self._send_log(
                 "new_deployment",
                 {
@@ -509,6 +519,15 @@ class DeploymentEngine:
             await client.delete_project(dep["project_id"])
             await database.delete_deployment(deployment_id)
             await token_manager.release_token(dep["railway_token"])
+
+            # Clean up saved zip backup
+            try:
+                zip_save_path = os.path.join("data", "zips", f"{deployment_id}.zip")
+                if os.path.exists(zip_save_path):
+                    os.remove(zip_save_path)
+            except Exception as zip_del_err:
+                logger.error(f"Failed to delete zip backup: {zip_del_err}")
+
             terminal.add_line("deployment deleted")
             return True
         except Exception as e:
@@ -544,16 +563,101 @@ class DeploymentEngine:
             env = await new_client.create_environment(project_id)
             env_id = env["environmentCreate"]["id"]
 
-            service = await new_client.create_service(project_id, "bot-service")
-            service_id = service["serviceCreate"]["id"]
+            is_zip = dep.get("repo_url") == "ZIP Upload"
+            
+            if is_zip:
+                # Local ZIP migration
+                zip_save_path = os.path.join("data", "zips", f"{deployment_id}.zip")
+                if not os.path.exists(zip_save_path):
+                    terminal.add_error("source zip file not found for migration")
+                    return False
+                    
+                with open(zip_save_path, "rb") as f:
+                    zip_data = f.read()
 
-            for key, value in dep.get("variables", {}).items():
-                await new_client.set_environment_variable(project_id, env_id, key, value, service_id=service_id)
+                service = await new_client.create_service(project_id, "bot-service")
+                service_id = service["serviceCreate"]["id"]
+                
+                # Check if region is set or fallback
+                region_code = dep.get("region", "us-west1")
+                await new_client.update_service_instance_region(service_id, env_id, region_code)
 
-            deploy = await new_client.create_deployment(service_id, env_id)
-            if not deploy:
-                terminal.add_error("migration deploy failed")
-                return False
+                # Set variables
+                for key, value in dep.get("variables", {}).items():
+                    await new_client.set_environment_variable(project_id, env_id, key, value, service_id=service_id)
+
+                # Extract and deploy using Railway CLI
+                extract_path = os.path.join(settings.TEMP_DIR, f"migrate_{deployment_id}")
+                os.makedirs(extract_path, exist_ok=True)
+                await github_client.extract_zip_to_path(zip_data, extract_path)
+                
+                cmd = f'railway up --detach --json --project "{project_id}" --service "{service_id}" --environment "{env_id}"'
+                env_vars = os.environ.copy()
+                env_vars["RAILWAY_TOKEN"] = new_token
+                
+                proc = await asyncio.create_subprocess_shell(
+                    cmd,
+                    cwd=extract_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env_vars
+                )
+                stdout_bytes, stderr_bytes = await proc.communicate()
+                shutil.rmtree(extract_path, ignore_errors=True)
+                
+                if proc.returncode != 0:
+                    err_msg = stderr_bytes.decode("utf-8", errors="ignore")
+                    terminal.add_error(f"Railway CLI upload failed during migration: {err_msg}")
+                    return False
+
+                # Parse new deployment ID
+                import re
+                dep_id = None
+                try:
+                    stdout_str = stdout_bytes.decode("utf-8", errors="ignore")
+                    import json
+                    try:
+                        data = json.loads(stdout_str)
+                        dep_id = data.get("deploymentId") or data.get("id")
+                    except Exception:
+                        match = re.search(r'"(?:deployment)?Id"\s*:\s*"([^"]+)"', stdout_str)
+                        if match:
+                            dep_id = match.group(1)
+                except Exception:
+                    pass
+
+                if not dep_id:
+                    dep_id = str(uuid.uuid4())[:12]
+            else:
+                # GitHub migration
+                parsed = github_client.parse_github_url(dep["repo_url"])
+                if not parsed:
+                    terminal.add_error("invalid repository URL in record")
+                    return False
+                    
+                repo_slug = f"{parsed['owner']}/{parsed['repo']}"
+                service = await new_client.create_service(project_id, "bot-service", source_repo=repo_slug)
+                service_id = service["serviceCreate"]["id"]
+                
+                # Check if region is set or fallback
+                region_code = dep.get("region", "us-west1")
+                await new_client.update_service_instance_region(service_id, env_id, region_code)
+
+                # Set variables
+                for key, value in dep.get("variables", {}).items():
+                    await new_client.set_environment_variable(project_id, env_id, key, value, service_id=service_id)
+
+                dep_id = await new_client.create_deployment(service_id, env_id)
+                if not dep_id:
+                    terminal.add_error("migration deploy failed")
+                    return False
+
+            # Generate public domain automatically
+            domain_doc = await new_client.create_service_domain(service_id, env_id)
+            if domain_doc and domain_doc.get("domain"):
+                dep_url = f"https://{domain_doc['domain']}"
+            else:
+                dep_url = f"https://{project_id}.up.railway.app"
 
             try:
                 await old_client.delete_project(dep["project_id"])
@@ -567,7 +671,9 @@ class DeploymentEngine:
                 "project_id": project_id,
                 "environment_id": env_id,
                 "service_id": service_id,
+                "railway_deployment_id": dep_id,
                 "status": "running",
+                "url": dep_url,
             })
 
             terminal.add_line("migration completed successfully")
