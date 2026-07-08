@@ -472,6 +472,32 @@ class DeploymentEngine:
         finally:
             await client.close()
 
+    async def redeploy_deployment(self, deployment_id: str) -> Optional[str]:
+        dep = await database.get_deployment(deployment_id)
+        if not dep:
+            return None
+        terminal = self.get_terminal(deployment_id)
+        terminal.add_line("triggering repository update & redeploy...")
+
+        client = RailwayClient(dep["railway_token"])
+        try:
+            new_dep_id = await client.create_deployment(dep["service_id"], dep["environment_id"])
+            if new_dep_id:
+                await database.update_deployment(deployment_id, {
+                    "status": "deploying",
+                    "railway_deployment_id": new_dep_id,
+                })
+                terminal.add_line(f"new deployment triggered: {new_dep_id[:8]}...")
+                terminal.add_line("building repository updates...")
+                return new_dep_id
+            return None
+        except Exception as e:
+            logger.error(f"Redeploy error: {e}")
+            terminal.add_error(f"redeploy failed: {str(e)}")
+            return None
+        finally:
+            await client.close()
+
     async def delete_deployment(self, deployment_id: str) -> bool:
         dep = await database.get_deployment(deployment_id)
         if not dep:

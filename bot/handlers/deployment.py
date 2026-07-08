@@ -45,11 +45,6 @@ async def handle_github_url(client: Client, message: Message):
     if not user:
         return
 
-    existing = await database.get_user_deployment(user_id)
-    if existing:
-        await message.reply_text("<b>⚠ You already have a running deployment</b>")
-        return
-
     url = message.text.strip()
     status_msg = await message.reply_text("<b>🔍 Scanning repository...</b>")
 
@@ -97,11 +92,6 @@ async def handle_zip_upload(client: Client, message: Message):
     user_id = message.from_user.id
     user = await database.get_user(user_id)
     if not user:
-        return
-
-    existing = await database.get_user_deployment(user_id)
-    if existing:
-        await message.reply_text("<b>⚠ You already have a running deployment</b>")
         return
 
     doc = message.document

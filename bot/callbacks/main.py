@@ -94,6 +94,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         "dom_create_custom": cb_dom_create_custom,
         "dom_delete_menu": cb_dom_delete_menu,
         "download_logs": cb_download_logs,
+        "redeploy": cb_redeploy,
     }
 
     matched_prefix = None
@@ -327,38 +328,50 @@ async def cb_support(client: Client, query: CallbackQuery):
 
 async def cb_live_terminal(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    dep = await database.get_user_deployment(user_id)
+    dep = await get_deployment_from_callback(query, user_id)
     if not dep:
         await query.answer("No active deployment")
         return
+    await query.answer("Fetching live build terminal...")
     logs = await deployment_engine.get_build_logs(dep["deployment_id"], limit=50)
-    full_text = f"{TERMINAL_HEADER}\n\n{logs}\n\n<b>🔄 Build Logs</b>"
+    full_text = (
+        f"🖥 <b>ʟɪᴠᴇ ʙᴜɪʟᴅ ᴛᴇʀᴍɪɴᴀʟ</b> (ID: <code>{dep['deployment_id'][:8]}</code>)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<code>{logs}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🖲 <i>Click 'Build & Terminal' again to refresh in real-time.</i>"
+    )
     if len(full_text) > 4000:
         full_text = full_text[-4000:]
     await query.message.edit_text(
         full_text,
-        reply_markup=my_bot_keyboard(True),
+        reply_markup=my_bot_keyboard(True, dep["deployment_id"]),
     )
-    await query.answer()
 
 
 async def cb_runtime_logs(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    dep = await database.get_user_deployment(user_id)
+    dep = await get_deployment_from_callback(query, user_id)
     if not dep:
         await query.answer("No active deployment")
         return
+    await query.answer("Fetching app logs...")
     logs = await deployment_engine.get_runtime_logs(dep["deployment_id"], limit=50)
-    full_text = f"{TERMINAL_HEADER}\n\n{logs}\n\n<b>📋 Application Logs</b>"
+    full_text = (
+        f"📋 <b>ᴀᴘᴘʟɪᴄᴀᴛɪᴏɴ ʀᴜɴᴛɪᴍᴇ ʟᴏɢs</b> (ID: <code>{dep['deployment_id'][:8]}</code>)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<code>{logs}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🖲 <i>Click 'App Logs' again to refresh.</i>"
+    )
     if len(full_text) > 4000:
         full_text = full_text[-4000:]
-    await query.message.edit_text(full_text, reply_markup=my_bot_keyboard(True))
-    await query.answer()
+    await query.message.edit_text(full_text, reply_markup=my_bot_keyboard(True, dep["deployment_id"]))
 
 
 async def cb_runtime_stats(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    dep = await database.get_user_deployment(user_id)
+    dep = await get_deployment_from_callback(query, user_id)
     if not dep:
         await query.answer("No active deployment")
         return
@@ -370,64 +383,70 @@ async def cb_runtime_stats(client: Client, query: CallbackQuery):
         f"<b>🌍 URL:</b> <code>{stats.get('url', 'N/A')}</code>\n"
         f"<b>🔄 Restarts:</b> {stats.get('restart_count', 0)}\n"
         f"<b>⚙ Framework:</b> {stats.get('framework', 'N/A')}\n"
-        f"<b>🚀 Startup:</b> {stats.get('startup_file', 'N/A')}"
+        f"<b>🚀 Startup:</b> {stats.get('startup_file', 'N/A')}\n\n"
+        f"<i>Selected Bot: <code>{dep['deployment_id'][:8]}</code></i>"
     )
-    await query.message.edit_text(text, reply_markup=my_bot_keyboard(True))
+    await query.message.edit_text(text, reply_markup=my_bot_keyboard(True, dep["deployment_id"]))
     await query.answer()
 
 
 async def cb_edit_vars(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    dep = await get_deployment_from_callback(query, user_id)
+    if not dep:
+        await query.answer("No active deployment")
+        return
     await query.message.edit_text(
         "<blockquote><b>🔧 ᴠᴀʀɪᴀʙʟᴇ ᴍᴀɴᴀɢᴇʀ</b></blockquote>\n\n"
         "<b>ᴍᴀɴᴀɢᴇ ʏᴏᴜʀ ʙᴏᴛ's ᴇɴᴠɪʀᴏɴᴍᴇɴᴛ ᴠᴀʀɪᴀʙʟᴇs.</b>",
-        reply_markup=variable_keyboard(),
+        reply_markup=variable_keyboard(dep["deployment_id"]),
     )
     await query.answer()
 
 
 async def cb_restart_bot(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    dep = await database.get_user_deployment(user_id)
+    dep = await get_deployment_from_callback(query, user_id)
     if not dep:
         await query.answer("No active deployment")
         return
     await query.message.edit_text(
         "<b>🔄 Restarting your bot...</b>",
-        reply_markup=confirmation_keyboard("restart"),
+        reply_markup=confirmation_keyboard(f"restart_{dep['deployment_id']}"),
     )
     await query.answer()
 
 
 async def cb_stop_bot(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    dep = await database.get_user_deployment(user_id)
+    dep = await get_deployment_from_callback(query, user_id)
     if not dep:
         await query.answer("No active deployment")
         return
     await query.message.edit_text(
         "<b>⏹ Are you sure you want to stop your bot?</b>",
-        reply_markup=confirmation_keyboard("stop"),
+        reply_markup=confirmation_keyboard(f"stop_{dep['deployment_id']}"),
     )
     await query.answer()
 
 
 async def cb_delete_bot(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    dep = await database.get_user_deployment(user_id)
+    dep = await get_deployment_from_callback(query, user_id)
     if not dep:
         await query.answer("No active deployment")
         return
     await query.message.edit_text(
         "<b>🗑 Are you sure you want to permanently delete your bot?</b>\n\n"
         "<b>⚠ This action cannot be undone!</b>",
-        reply_markup=confirmation_keyboard("delete"),
+        reply_markup=confirmation_keyboard(f"delete_{dep['deployment_id']}"),
     )
     await query.answer()
 
 
 async def cb_view_url(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    dep = await database.get_user_deployment(user_id)
+    dep = await get_deployment_from_callback(query, user_id)
     if not dep:
         await query.answer("No active deployment")
         return
@@ -922,22 +941,22 @@ async def cb_confirm(client: Client, query: CallbackQuery):
     action = query.data[8:]
     user_id = query.from_user.id
 
-    if action == "stop":
+    if action.startswith("stop"):
         dep = await get_deployment_from_callback(query, user_id)
         if dep:
             await deployment_engine.stop_deployment(dep["deployment_id"])
             await query.message.edit_text("<b>✅ Bot stopped successfully</b>", reply_markup=my_bot_keyboard(False, dep["deployment_id"]))
-    elif action == "delete":
+    elif action.startswith("delete"):
         dep = await get_deployment_from_callback(query, user_id)
         if dep:
             await deployment_engine.delete_deployment(dep["deployment_id"])
             await query.message.edit_text("<b>✅ Bot deleted permanently</b>", reply_markup=my_bot_keyboard(False))
-    elif action == "restart":
+    elif action.startswith("restart"):
         dep = await get_deployment_from_callback(query, user_id)
         if dep:
             await deployment_engine.restart_deployment(dep["deployment_id"])
             await query.message.edit_text("<b>✅ Bot restarted successfully</b>", reply_markup=my_bot_keyboard(True, dep["deployment_id"]))
-    elif action == "var_reset":
+    elif action.startswith("var_reset"):
         dep = await get_deployment_from_callback(query, user_id)
         if dep:
             await database.update_deployment(dep["deployment_id"], {"variables": {}})
@@ -970,7 +989,8 @@ async def cb_confirm(client: Client, query: CallbackQuery):
 async def cb_cancel(client: Client, query: CallbackQuery):
     action = query.data[7:]
     user_id = query.from_user.id
-    if action in ("stop", "delete", "restart", "var_reset", "force_redeploy"):
+    action_type = action.split("_")[0]
+    if action_type in ("stop", "delete", "restart", "var_reset", "force_redeploy"):
         dep = await get_deployment_from_callback(query, user_id)
         await query.message.edit_text("<b>❌ Action cancelled</b>", reply_markup=my_bot_keyboard(bool(dep), dep["deployment_id"] if dep else None))
     elif action == "back_deploy":
@@ -1339,3 +1359,102 @@ async def cb_download_logs(client: Client, query: CallbackQuery):
         logger = logging.getLogger(__name__)
         logger.error(f"Failed to send logs document: {err}")
         await query.message.reply_text(f"<b>❌ Failed to send logs document: {str(err)}</b>")
+
+
+async def track_background_redeploy(client: Client, message, user_id: int, deployment_id: str, railway_deployment_id: str):
+    logger = logging.getLogger(__name__)
+    try:
+        dep = await database.get_deployment(deployment_id)
+        if not dep:
+            await message.edit_text("<b>❌ Deployment record not found in database.</b>")
+            return
+            
+        railway_token = dep["railway_token"]
+        framework = dep.get("framework", "Bot")
+        dep_url = dep.get("url", "")
+        
+        await message.edit_text("<b>🟢 Redeployment triggered! Checking build progress...</b>")
+        
+        last_text = ""
+        for attempt in range(120): # Polling for 10 minutes max
+            await asyncio.sleep(5)
+            r_client = RailwayClient(railway_token)
+            try:
+                res = await r_client.get_deployment(railway_deployment_id)
+                if not res or not res.get("deployment"):
+                    continue
+                    
+                status = res["deployment"].get("status", "unknown").upper()
+                
+                # Fetch recent build logs
+                logs = await r_client.get_build_logs(railway_deployment_id, limit=15)
+                log_lines = "\n".join(f"[{log.get('timestamp', '')}] {log.get('message', '')}" for log in logs)
+                if not log_lines.strip():
+                    log_lines = "Waiting for builder to output logs..."
+                
+                text = (
+                    f"<blockquote><b>⚙ Redeploying Bot ({status})</b></blockquote>\n\n"
+                    f"<b>📋 Live Build Logs:</b>\n"
+                    f"<code>{log_lines[-3000:]}</code>"
+                )
+                
+                if text != last_text:
+                    try:
+                        await message.edit_text(text)
+                        last_text = text
+                    except Exception:
+                        pass
+                
+                if status in ("SUCCESS", "RUNNING", "CRASHED", "FAILED"):
+                    if status in ("SUCCESS", "RUNNING"):
+                        await database.update_deployment(deployment_id, {"status": "running", "railway_deployment_id": railway_deployment_id})
+                        await message.edit_text(
+                            f"<blockquote><b>✅ ʀᴇᴅᴇᴘʟᴏʏᴍᴇɴᴛ sᴜᴄᴄᴇssғᴜʟ</b></blockquote>\n\n"
+                            f"<b>⚙ Framework:</b> {framework}\n"
+                            f"<b>🌍 URL:</b> <code>{dep_url}</code>\n\n"
+                            f"<b>Your bot is updated with the latest GitHub commits!</b>",
+                            reply_markup=my_bot_keyboard(True, deployment_id),
+                        )
+                    else:
+                        await database.update_deployment(deployment_id, {"status": "failed"})
+                        await message.edit_text(
+                            f"<blockquote><b>❌ ʀᴇᴅᴇᴘʟᴏʏᴍᴇɴᴛ ғᴀɪʟᴇᴅ</b></blockquote>\n\n"
+                            f"<b>Status:</b> <code>{status}</code>\n\n"
+                            f"Please check your code syntax or logs.",
+                            reply_markup=my_bot_keyboard(True, deployment_id),
+                        )
+                    break
+            except Exception as e:
+                logger.error(f"Error in tracking build: {e}")
+            finally:
+                await r_client.close()
+        else:
+            await message.edit_text("<b>❌ Redeployment tracking timed out (took >10 mins). Check status later.</b>", reply_markup=my_bot_keyboard(True, deployment_id))
+            
+    except Exception as ex:
+        logger.exception("Background redeployment error")
+        try:
+            await message.edit_text(f"<b>❌ Unexpected redeployment error:</b> {str(ex)}")
+        except Exception:
+            pass
+
+
+async def cb_redeploy(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    dep = await get_deployment_from_callback(query, user_id)
+    if not dep:
+        await query.answer("No active deployment found", show_alert=True)
+        return
+
+    if dep.get("repo_url") == "ZIP Upload":
+        await query.answer("❌ This bot was deployed via ZIP. You cannot check repository updates for ZIP uploads. Use restart or upload a new ZIP.", show_alert=True)
+        return
+
+    await query.message.edit_text("<b>🔄 Checking for repository updates...</b>")
+    await query.answer("Triggering redeploy...")
+
+    new_dep_id = await deployment_engine.redeploy_deployment(dep["deployment_id"])
+    if new_dep_id:
+        asyncio.create_task(track_background_redeploy(client, query.message, user_id, dep["deployment_id"], new_dep_id))
+    else:
+        await query.message.edit_text("<b>❌ Failed to trigger redeployment on Railway.</b>", reply_markup=my_bot_keyboard(True, dep["deployment_id"]))
