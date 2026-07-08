@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.env.local
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+*.db
+logs/*.log
+temp/
+downloads/
+*.zip
+*.tar.gz
+node_modules/
+.DS_Store
+Thumbs.db
+*.egg
+
+# Pyrogram Sessions
+*.session
+*.session-journal
