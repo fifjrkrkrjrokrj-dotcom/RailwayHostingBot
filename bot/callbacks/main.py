@@ -1,6 +1,7 @@
 import time
 import asyncio
 import logging
+logger = logging.getLogger(__name__)
 from pyrogram import Client
 from pyrogram.types import CallbackQuery
 from bot.config.settings import settings
@@ -111,24 +112,42 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 matched_prefix = potential_prefix
 
     handler = handlers.get(data) or (handlers.get(matched_prefix) if matched_prefix else None)
-    if handler:
-        await handler(client, query)
-    elif data.startswith("selectregion_"):
-        await cb_select_region(client, query)
-    elif data.startswith("setregion_"):
-        await cb_set_region(client, query)
-    elif data.startswith("setregionactive_"):
-        await cb_set_region_active(client, query)
-    elif data.startswith("confirm_delete_dom_"):
-        await cb_confirm_delete_dom(client, query)
-    elif data.startswith("confirm_"):
-        await cb_confirm(client, query)
-    elif data.startswith("cancel_"):
-        await cb_cancel(client, query)
-    elif data.startswith("addvars_"):
-        await query.answer("To add variables, simply send them in the chat using KEY=VALUE format. For example:\nBOT_TOKEN=123:ABC", show_alert=True)
-    else:
-        await query.answer("Unknown action")
+    try:
+        if handler:
+            await handler(client, query)
+        elif data.startswith("selectregion_"):
+            await cb_select_region(client, query)
+        elif data.startswith("setregion_"):
+            await cb_set_region(client, query)
+        elif data.startswith("setregionactive_"):
+            await cb_set_region_active(client, query)
+        elif data.startswith("confirm_delete_dom_"):
+            await cb_confirm_delete_dom(client, query)
+        elif data.startswith("confirm_"):
+            await cb_confirm(client, query)
+        elif data.startswith("cancel_"):
+            await cb_cancel(client, query)
+        elif data.startswith("addvars_"):
+            await query.answer("To add variables, simply send them in the chat using KEY=VALUE format. For example:\nBOT_TOKEN=123:ABC", show_alert=True)
+        else:
+            await query.answer("Unknown action")
+    except Exception as e:
+        logger.exception(f"Error handling callback {data}: {e}")
+        try:
+            await query.answer("An error occurred. Check notifications.", show_alert=True)
+        except Exception:
+            pass
+        from bot.services.log_service import owner_log
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        err_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🏡 Main Menu", callback_data="main_menu")]])
+        try:
+            await client.send_message(
+                user_id,
+                f"❌ <b>Error processing action:</b>\n<code>{str(e)}</code>",
+                reply_markup=err_markup
+            )
+        except Exception as msg_err:
+            logger.error(f"Failed to send error notification message to user: {msg_err}")
 
 
 async def cb_main_menu(client: Client, query: CallbackQuery):
@@ -391,13 +410,73 @@ async def cb_updates(client: Client, query: CallbackQuery):
     await query.answer()
 
 
-async def cb_support(client: Client, query: CallbackQuery):
-    await query.message.edit_text(
-        "<blockquote><b>📞 sᴜᴘᴘᴏʀᴛ ᴄᴇɴᴛᴇʀ</b></blockquote>\n\n"
-        "<b>ɴᴇᴇᴅ ʜᴇʟᴘ? ᴄʜᴏᴏsᴇ ᴀɴ ᴏᴘᴛɪᴏɴ ʙᴇʟᴏᴡ.</b>",
-        reply_markup=support_keyboard(),
-    )
-    await query.answer()
+# --- LOGS AUTO-REFRESH SYSTEM ---
+ACTIVE_REFRESHES = {}
+
+async def start_auto_refresh(client, chat_id, message_id, deployment_id, log_type):
+    key = (chat_id, message_id)
+    if key in ACTIVE_REFRESHES:
+        try:
+            ACTIVE_REFRESHES[key].cancel()
+        except Exception:
+            pass
+            
+    async def refresh_loop():
+        try:
+            for _ in range(15): # Refresh every 4 seconds for 60 seconds total
+                await asyncio.sleep(4)
+                try:
+                    msg = await client.get_messages(chat_id, message_id)
+                    if not msg or not msg.text:
+                        break
+                    # Verify user is still on the log view
+                    expected_kw = "ʙᴜɪʟᴅ ʟᴏɢs" if log_type == "build" else "ᴅᴇᴘʟᴏʏ ʟᴏɢs"
+                    expected_kw_old = "ʟɪᴠᴇ ʙᴜɪʟᴅ ᴛᴇʀᴍɪɴᴀʟ" if log_type == "build" else "ᴀᴘᴘʟɪᴄᴀᴛɪᴏɴ ʀᴜɴᴛɪᴍᴇ ʟᴏɢs"
+                    if expected_kw not in msg.text and expected_kw_old not in msg.text:
+                        break
+                except Exception:
+                    break
+                    
+                if log_type == "build":
+                    logs = await deployment_engine.get_build_logs(deployment_id, limit=50)
+                    full_text = (
+                        f"🛠 <b>ʙᴜɪʟᴅ ʟᴏɢs</b> (ID: <code>{deployment_id[:8]}</code>)\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"<code>{logs}</code>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔄 <i>Auto-refreshing dynamically...</i>"
+                    )
+                else:
+                    logs = await deployment_engine.get_runtime_logs(deployment_id, limit=50)
+                    full_text = (
+                        f"🚀 <b>ᴅᴇᴘʟᴏʏ ʟᴏɢs</b> (ID: <code>{deployment_id[:8]}</code>)\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"<code>{logs}</code>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔄 <i>Auto-refreshing dynamically...</i>"
+                    )
+                    
+                if len(full_text) > 4000:
+                    full_text = full_text[-4000:]
+                    
+                try:
+                    await client.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=full_text,
+                        reply_markup=my_bot_keyboard(True, deployment_id)
+                    )
+                except Exception as e:
+                    if "MESSAGE_NOT_MODIFIED" in str(e) or "not modified" in str(e).lower():
+                        continue
+                    break
+        except asyncio.CancelledError:
+            pass
+        finally:
+            ACTIVE_REFRESHES.pop(key, None)
+
+    task = asyncio.create_task(refresh_loop())
+    ACTIVE_REFRESHES[key] = task
 
 
 async def cb_live_terminal(client: Client, query: CallbackQuery):
@@ -406,14 +485,14 @@ async def cb_live_terminal(client: Client, query: CallbackQuery):
     if not dep:
         await query.answer("No active deployment")
         return
-    await query.answer("Fetching live build terminal...")
+    await query.answer("Fetching build logs...")
     logs = await deployment_engine.get_build_logs(dep["deployment_id"], limit=50)
     full_text = (
-        f"🖥 <b>ʟɪᴠᴇ ʙᴜɪʟᴅ ᴛᴇʀᴍɪɴᴀʟ</b> (ID: <code>{dep['deployment_id'][:8]}</code>)\n"
+        f"🛠 <b>ʙᴜɪʟᴅ ʟᴏɢs</b> (ID: <code>{dep['deployment_id'][:8]}</code>)\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<code>{logs}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🖲 <i>Click 'Build & Terminal' again to refresh in real-time.</i>"
+        f"🔄 <i>Auto-refreshing dynamically...</i>"
     )
     if len(full_text) > 4000:
         full_text = full_text[-4000:]
@@ -421,6 +500,7 @@ async def cb_live_terminal(client: Client, query: CallbackQuery):
         full_text,
         reply_markup=my_bot_keyboard(True, dep["deployment_id"]),
     )
+    await start_auto_refresh(client, query.message.chat.id, query.message.id, dep["deployment_id"], "build")
 
 
 async def cb_runtime_logs(client: Client, query: CallbackQuery):
@@ -429,18 +509,20 @@ async def cb_runtime_logs(client: Client, query: CallbackQuery):
     if not dep:
         await query.answer("No active deployment")
         return
-    await query.answer("Fetching app logs...")
+    await query.answer("Fetching deploy logs...")
     logs = await deployment_engine.get_runtime_logs(dep["deployment_id"], limit=50)
     full_text = (
-        f"📋 <b>ᴀᴘᴘʟɪᴄᴀᴛɪᴏɴ ʀᴜɴᴛɪᴍᴇ ʟᴏɢs</b> (ID: <code>{dep['deployment_id'][:8]}</code>)\n"
+        f"🚀 <b>ᴅᴇᴘʟᴏʏ ʟᴏɢs</b> (ID: <code>{dep['deployment_id'][:8]}</code>)\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<code>{logs}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🖲 <i>Click 'App Logs' again to refresh.</i>"
+        f"🔄 <i>Auto-refreshing dynamically...</i>"
     )
     if len(full_text) > 4000:
         full_text = full_text[-4000:]
     await query.message.edit_text(full_text, reply_markup=my_bot_keyboard(True, dep["deployment_id"]))
+    await start_auto_refresh(client, query.message.chat.id, query.message.id, dep["deployment_id"], "runtime")
+
 
 
 async def cb_runtime_stats(client: Client, query: CallbackQuery):
@@ -1297,8 +1379,12 @@ async def cb_confirm_delete_dom(client: Client, query: CallbackQuery):
 
 async def track_background_deployment(client: Client, message, user_id: int, context: dict, dep_vars: dict):
     logger = logging.getLogger(__name__)
+    from bot.services.log_service import owner_log
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    building_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏡 Main Menu", callback_data="main_menu")]])
+    
     try:
-        await message.edit_text("<b>🚀 Starting project creation and setup...</b>")
+        await message.edit_text("<b>🚀 Starting project creation and setup...</b>", reply_markup=building_kb)
         
         if context["type"] == "github":
             result = await deployment_engine.deploy_from_github(user_id, context["url"], dep_vars)
@@ -1306,9 +1392,14 @@ async def track_background_deployment(client: Client, message, user_id: int, con
             result = await deployment_engine.deploy_from_zip(user_id, context["zip_data"], dep_vars)
             
         if not result.get("success"):
+            error_msg = result.get('error', 'Unknown error')
+            await owner_log.send_user_notification(
+                user_id,
+                f"❌ <b>Deployment Failed:</b>\n<code>{error_msg}</code>"
+            )
             await message.edit_text(
                 f"<blockquote><b>❌ ᴅᴇᴘʟᴏʏᴍᴇɴᴛ ғᴀɪʟᴇᴅ</b></blockquote>\n\n"
-                f"<b>Error:</b> {result.get('error', 'Unknown error')}",
+                f"<b>Error:</b> {error_msg}",
                 reply_markup=deploy_keyboard(),
             )
             return
@@ -1325,7 +1416,7 @@ async def track_background_deployment(client: Client, message, user_id: int, con
         railway_deployment_id = dep["railway_deployment_id"]
         railway_token = dep["railway_token"]
         
-        await message.edit_text("<b>🟢 Project created! Checking build progress...</b>")
+        await message.edit_text("<b>🟢 Project created! Checking build progress...</b>", reply_markup=building_kb)
         
         last_text = ""
         for attempt in range(120): # Polling for 10 minutes max
@@ -1358,43 +1449,79 @@ async def track_background_deployment(client: Client, message, user_id: int, con
                 
                 if text != last_text:
                     try:
-                        await message.edit_text(text)
-                        last_text = text
+                        current_msg = await client.get_messages(message.chat.id, message.id)
+                        if current_msg and current_msg.text and ("ʙᴜɪʟᴅɪɴɢ ʙᴏᴛ" in current_msg.text or "Starting project" in current_msg.text or "Project created" in current_msg.text):
+                            await message.edit_text(text, reply_markup=building_kb)
+                            last_text = text
                     except Exception:
                         pass
                 
                 if status in ("SUCCESS", "RUNNING", "CRASHED", "FAILED"):
                     if status in ("SUCCESS", "RUNNING"):
                         await database.update_deployment(deployment_id, {"status": "running", "url": dep_url})
-                        await message.edit_text(
-                            f"<blockquote><b>✅ ᴅᴇᴘʟᴏʏᴍᴇɴᴛ sᴜᴄᴄᴇssғᴜʟ</b></blockquote>\n\n"
-                            f"<b>⚙ Framework:</b> {framework}\n"
-                            f"<b>🌍 URL:</b> <code>{dep_url}</code>\n\n"
-                            f"<b>Use the buttons below to manage your bot.</b>",
-                            reply_markup=my_bot_keyboard(True, deployment_id),
+                        await owner_log.send_user_notification(
+                            user_id,
+                            f"🎉 <b>Bot Deployment Successful!</b>\n\n"
+                            f"⚙ <b>Framework:</b> {framework}\n"
+                            f"🌍 <b>URL:</b> {dep_url}\n"
+                            f"🆔 <b>Deployment ID:</b> <code>{deployment_id}</code>"
                         )
+                        try:
+                            current_msg = await client.get_messages(message.chat.id, message.id)
+                            if current_msg and current_msg.text and ("ʙᴜɪʟᴅɪɴɢ ʙᴏᴛ" in current_msg.text or "Starting project" in current_msg.text or "Project created" in current_msg.text):
+                                await message.edit_text(
+                                    f"<blockquote><b>✅ ᴅᴇᴘʟᴏʏᴍᴇɴᴛ sᴜᴄᴄᴇssғᴜʟ</b></blockquote>\n\n"
+                                    f"<b>⚙ Framework:</b> {framework}\n"
+                                    f"<b>🌍 URL:</b> <code>{dep_url}</code>\n\n"
+                                    f"<b>Use the buttons below to manage your bot.</b>",
+                                    reply_markup=my_bot_keyboard(True, deployment_id),
+                                )
+                        except Exception:
+                            pass
                     else:
                         await database.update_deployment(deployment_id, {"status": "failed"})
-                        await message.edit_text(
-                            f"<blockquote><b>❌ ᴅᴇᴘʟᴏʏᴍᴇɴᴛ ғᴀɪʟᴇᴅ</b></blockquote>\n\n"
-                            f"<b>Status:</b> <code>{status}</code>\n\n"
-                            f"Please check your code syntax or logs.",
-                            reply_markup=deploy_keyboard(),
+                        await owner_log.send_user_notification(
+                            user_id,
+                            f"❌ <b>Bot Deployment Failed!</b>\n\n"
+                            f"🆔 <b>Deployment ID:</b> <code>{deployment_id}</code>\n"
+                            f"⚠️ <b>Status:</b> <code>{status}</code>\n"
+                            f"Please check your code or build logs."
                         )
+                        try:
+                            current_msg = await client.get_messages(message.chat.id, message.id)
+                            if current_msg and current_msg.text and ("ʙᴜɪʟᴅɪɴɢ ʙᴏᴛ" in current_msg.text or "Starting project" in current_msg.text or "Project created" in current_msg.text):
+                                await message.edit_text(
+                                    f"<blockquote><b>❌ ᴅᴇᴘʟᴏʏᴍᴇɴᴛ ғᴀɪʟᴇᴅ</b></blockquote>\n\n"
+                                    f"<b>Status:</b> <code>{status}</code>\n\n"
+                                    f"Please check your code syntax or logs.",
+                                    reply_markup=deploy_keyboard(),
+                                )
+                        except Exception:
+                            pass
                     break
             except Exception as e:
                 logger.error(f"Error in tracking build: {e}")
             finally:
                 await r_client.close()
         else:
-            await message.edit_text("<b>❌ Build tracking timed out (took >10 mins). Check status later.</b>", reply_markup=my_bot_keyboard(True, deployment_id))
+            try:
+                current_msg = await client.get_messages(message.chat.id, message.id)
+                if current_msg and current_msg.text and ("ʙᴜɪʟᴅɪɴɢ ʙᴏᴛ" in current_msg.text or "Starting project" in current_msg.text or "Project created" in current_msg.text):
+                    await message.edit_text("<b>❌ Build tracking timed out (took >10 mins). Check status later.</b>", reply_markup=my_bot_keyboard(True, deployment_id))
+            except Exception:
+                pass
             
     except Exception as ex:
         logger.exception("Background deployment error")
+        await owner_log.send_user_notification(
+            user_id,
+            f"❌ <b>Unexpected Deployment Error:</b>\n<code>{str(ex)}</code>"
+        )
         try:
             await message.edit_text(f"<b>❌ Unexpected deployment error:</b> {str(ex)}")
         except Exception:
             pass
+
 
 
 async def cb_download_logs(client: Client, query: CallbackQuery):

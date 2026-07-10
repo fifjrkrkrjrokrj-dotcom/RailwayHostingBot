@@ -6,6 +6,17 @@ import time
 import urllib.request
 import json
 
+# --- FIX NOTIMPLEMENTEDERROR FOR SUBPROCESSES ON UNIX ---
+if sys.platform != "win32":
+    try:
+        watcher = asyncio.ThreadedChildWatcher()
+        asyncio.get_event_loop_policy().set_child_watcher(watcher)
+        print("Successfully set asyncio ThreadedChildWatcher for Unix.")
+    except Exception as e:
+        print(f"Warning: Failed to set ThreadedChildWatcher: {e}")
+# --------------------------------------------------------
+
+
 # --- FIX WORKING DIRECTORY AND TIME SYNC ---
 # 1. Fix cwd so Pyrogram can find plugins in bot.handlers when run from parent dir
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -63,9 +74,81 @@ Message.read = patched_message_read
 
 from pyrogram.types import Message as PyMessage, CallbackQuery as PyCallbackQuery
 
+# --- PATCH MESSAGE & CALLBACK REPLY/EDIT FOR FALLBACK AND DEFAULT BUTTONS ---
+
+_original_send_message = Client.send_message
+
+async def _patched_send_message(self, chat_id, text, *args, **kwargs):
+    try:
+        chat_id = int(chat_id)
+    except Exception:
+        pass
+
+    no_buttons = kwargs.pop("no_buttons", False)
+    reply_markup = kwargs.get("reply_markup")
+
+    if not no_buttons and reply_markup is None and isinstance(chat_id, int) and chat_id > 0:
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🏡 Main Menu", callback_data="main_menu")]])
+        kwargs["reply_markup"] = reply_markup
+
+    if reply_markup is not None and hasattr(reply_markup, "to_dict") and "telegram" in type(reply_markup).__module__:
+        import aiohttp
+        from bot.config.settings import settings
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": reply_markup.to_dict(),
+            "parse_mode": "HTML",
+            "disable_web_page_preview": kwargs.get("disable_web_page_preview", False)
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage", json=payload) as resp:
+                    if resp.status == 200:
+                        return None
+                    else:
+                        err_text = await resp.text()
+                        logging.getLogger(__name__).error(f"Fallback send_message failed: {resp.status} - {err_text}")
+        except Exception as api_err:
+            logging.getLogger(__name__).error(f"Fallback send_message failed with exception: {api_err}")
+
+    try:
+        return await _original_send_message(self, chat_id, text, *args, **kwargs)
+    except Exception as e:
+        import aiohttp
+        from bot.config.settings import settings
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": kwargs.get("disable_web_page_preview", False)
+        }
+        if reply_markup is not None:
+            if hasattr(reply_markup, "to_dict"):
+                payload["reply_markup"] = reply_markup.to_dict()
+            elif isinstance(reply_markup, dict):
+                payload["reply_markup"] = reply_markup
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage", json=payload) as resp:
+                    if resp.status == 200:
+                        return None
+        except Exception as api_err:
+            logging.getLogger(__name__).error(f"Fallback send_message after failure failed: {api_err}")
+        raise e
+
+Client.send_message = _patched_send_message
+
 _original_reply_text = PyMessage.reply_text
 
 async def _patched_reply_text(self, text, reply_markup=None, **kwargs):
+    no_buttons = kwargs.pop("no_buttons", False)
+    
+    if not no_buttons and reply_markup is None and self.chat.id > 0:
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🏡 Main Menu", callback_data="main_menu")]])
+
     if reply_markup is not None and hasattr(reply_markup, "to_dict") and "telegram" in type(reply_markup).__module__:
         import aiohttp
         from bot.config.settings import settings
@@ -76,16 +159,50 @@ async def _patched_reply_text(self, text, reply_markup=None, **kwargs):
             "parse_mode": "HTML",
             "disable_web_page_preview": kwargs.get("disable_web_page_preview", False)
         }
-        async with aiohttp.ClientSession() as session:
-            await session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage", json=payload)
-        return None
-    return await _original_reply_text(self, text, reply_markup=reply_markup, **kwargs)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage", json=payload) as resp:
+                    if resp.status == 200:
+                        return None
+        except Exception as api_err:
+            logging.getLogger(__name__).error(f"Fallback reply_text failed: {api_err}")
+
+    try:
+        return await _original_reply_text(self, text, reply_markup=reply_markup, **kwargs)
+    except Exception as e:
+        import aiohttp
+        from bot.config.settings import settings
+        payload = {
+            "chat_id": self.chat.id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": kwargs.get("disable_web_page_preview", False)
+        }
+        if reply_markup is not None:
+            if hasattr(reply_markup, "to_dict"):
+                payload["reply_markup"] = reply_markup.to_dict()
+            elif isinstance(reply_markup, dict):
+                payload["reply_markup"] = reply_markup
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage", json=payload) as resp:
+                    if resp.status == 200:
+                        return None
+        except Exception as api_err:
+            logging.getLogger(__name__).error(f"Fallback reply_text after failure failed: {api_err}")
+        raise e
 
 PyMessage.reply_text = _patched_reply_text
 
 _original_edit_text = PyMessage.edit_text
 
 async def _patched_edit_text(self, text, reply_markup=None, **kwargs):
+    no_buttons = kwargs.pop("no_buttons", False)
+
+    if not no_buttons and reply_markup is None and self.chat.id > 0:
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🏡 Main Menu", callback_data="main_menu")]])
+
     if reply_markup is not None and hasattr(reply_markup, "to_dict") and "telegram" in type(reply_markup).__module__:
         import aiohttp
         from bot.config.settings import settings
@@ -97,16 +214,52 @@ async def _patched_edit_text(self, text, reply_markup=None, **kwargs):
             "parse_mode": "HTML",
             "disable_web_page_preview": kwargs.get("disable_web_page_preview", False)
         }
-        async with aiohttp.ClientSession() as session:
-            await session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/editMessageText", json=payload)
-        return None
-    return await _original_edit_text(self, text, reply_markup=reply_markup, **kwargs)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/editMessageText", json=payload) as resp:
+                    if resp.status == 200:
+                        return None
+        except Exception as api_err:
+            logging.getLogger(__name__).error(f"Fallback edit_text failed: {api_err}")
+
+    try:
+        return await _original_edit_text(self, text, reply_markup=reply_markup, **kwargs)
+    except Exception as e:
+        import aiohttp
+        from bot.config.settings import settings
+        payload = {
+            "chat_id": self.chat.id,
+            "message_id": self.id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": kwargs.get("disable_web_page_preview", False)
+        }
+        if reply_markup is not None:
+            if hasattr(reply_markup, "to_dict"):
+                payload["reply_markup"] = reply_markup.to_dict()
+            elif isinstance(reply_markup, dict):
+                payload["reply_markup"] = reply_markup
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/editMessageText", json=payload) as resp:
+                    if resp.status == 200:
+                        return None
+        except Exception as api_err:
+            logging.getLogger(__name__).error(f"Fallback edit_text after failure failed: {api_err}")
+        raise e
 
 PyMessage.edit_text = _patched_edit_text
 
 _original_edit_message_text = PyCallbackQuery.edit_message_text
 
 async def _patched_edit_message_text(self, text, reply_markup=None, **kwargs):
+    no_buttons = kwargs.pop("no_buttons", False)
+
+    chat_id = self.message.chat.id if self.message else 0
+    if not no_buttons and reply_markup is None and chat_id > 0:
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🏡 Main Menu", callback_data="main_menu")]])
+
     if reply_markup is not None and hasattr(reply_markup, "to_dict") and "telegram" in type(reply_markup).__module__:
         import aiohttp
         from bot.config.settings import settings
@@ -118,12 +271,42 @@ async def _patched_edit_message_text(self, text, reply_markup=None, **kwargs):
             "parse_mode": "HTML",
             "disable_web_page_preview": kwargs.get("disable_web_page_preview", False)
         }
-        async with aiohttp.ClientSession() as session:
-            await session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/editMessageText", json=payload)
-        return None
-    return await _original_edit_message_text(self, text, reply_markup=reply_markup, **kwargs)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/editMessageText", json=payload) as resp:
+                    if resp.status == 200:
+                        return None
+        except Exception as api_err:
+            logging.getLogger(__name__).error(f"Fallback edit_message_text failed: {api_err}")
+
+    try:
+        return await _original_edit_message_text(self, text, reply_markup=reply_markup, **kwargs)
+    except Exception as e:
+        import aiohttp
+        from bot.config.settings import settings
+        payload = {
+            "chat_id": self.message.chat.id,
+            "message_id": self.message.id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": kwargs.get("disable_web_page_preview", False)
+        }
+        if reply_markup is not None:
+            if hasattr(reply_markup, "to_dict"):
+                payload["reply_markup"] = reply_markup.to_dict()
+            elif isinstance(reply_markup, dict):
+                payload["reply_markup"] = reply_markup
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/editMessageText", json=payload) as resp:
+                    if resp.status == 200:
+                        return None
+        except Exception as api_err:
+            logging.getLogger(__name__).error(f"Fallback edit_message_text after failure failed: {api_err}")
+        raise e
 
 PyCallbackQuery.edit_message_text = _patched_edit_message_text
+
 
 from bot.config.settings import settings
 from bot.database.db import database

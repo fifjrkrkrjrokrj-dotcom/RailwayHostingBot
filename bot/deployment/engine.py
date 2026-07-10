@@ -129,6 +129,16 @@ class DeploymentEngine:
                 error_msg = str(e).lower()
                 if "limit exceeded" in error_msg or "provision limit" in error_msg:
                     terminal.add_error(f"token {token_doc['token'][:5]}... exhausted. switching token...")
+                    try:
+                        from bot.services.log_service import owner_log
+                        await owner_log.send_user_notification(
+                            user_id,
+                            f"🔄 <b>Railway Token Switch</b>\n\n"
+                            f"The current Railway server token was exhausted or limit exceeded. "
+                            f"The bot is automatically switching to a new available token to deploy your project."
+                        )
+                    except Exception as notify_err:
+                        logger.error(f"Failed to send switch notification: {notify_err}")
                     await database.disable_token(token_doc["token"])
                     await token_manager.release_token(token_doc["token"])
                 else:
@@ -295,6 +305,16 @@ class DeploymentEngine:
                 error_msg = str(e).lower()
                 if "limit exceeded" in error_msg or "provision limit" in error_msg:
                     terminal.add_error(f"token {token_doc['token'][:5]}... exhausted. switching token...")
+                    try:
+                        from bot.services.log_service import owner_log
+                        await owner_log.send_user_notification(
+                            user_id,
+                            f"🔄 <b>Railway Token Switch</b>\n\n"
+                            f"The current Railway server token was exhausted or limit exceeded. "
+                            f"The bot is automatically switching to a new available token to deploy your project."
+                        )
+                    except Exception as notify_err:
+                        logger.error(f"Failed to send switch notification: {notify_err}")
                     await database.disable_token(token_doc["token"])
                     await token_manager.release_token(token_doc["token"])
                 else:
@@ -550,6 +570,17 @@ class DeploymentEngine:
                 terminal.add_error("no tokens available for migration")
                 return False
             new_token = token_doc["token"]
+            
+        try:
+            from bot.services.log_service import owner_log
+            await owner_log.send_user_notification(
+                dep["user_id"],
+                f"🔄 <b>Railway Token Switch Notification</b>\n\n"
+                f"Your bot (ID: <code>{deployment_id[:8]}</code>) has been switched to a new Railway API token because the previous token was deactivated or exhausted. "
+                f"The bot is now being migrated and redeployed on the new token to maintain continuous operation."
+            )
+        except Exception as notify_err:
+            logger.error(f"Failed to send migration token switch notification: {notify_err}")
 
         old_token = dep["railway_token"]
         old_client = RailwayClient(old_token)

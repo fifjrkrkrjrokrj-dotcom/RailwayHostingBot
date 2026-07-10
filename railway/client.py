@@ -39,7 +39,15 @@ class RailwayClient:
             async with self.session.post(self.API_BASE, json=payload) as resp:
                 if resp.status == 401:
                     raise PermissionError("Invalid Railway token")
-                data = await resp.json()
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise Exception(f"Railway API returned HTTP {resp.status}: {text}")
+                try:
+                    data = await resp.json()
+                except Exception as json_err:
+                    text = await resp.text()
+                    raise Exception(f"Failed to parse Railway API JSON (HTTP {resp.status}): {text}") from json_err
+                
                 if "errors" in data:
                     raise Exception(f"GraphQL error: {data['errors']}")
                 return data.get("data", {})

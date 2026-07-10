@@ -51,7 +51,7 @@ def my_bot_keyboard(has_deployment: bool = False, deployment_id: str = None) -> 
         return InlineKeyboardMarkup(buttons)
     suffix = f"_{deployment_id}" if deployment_id else ""
     buttons = [
-        [btn("💻 Build & Terminal", f"live_terminal{suffix}"), btn("📋 App Logs", f"runtime_logs{suffix}")],
+        [btn("🛠 Build Logs", f"live_terminal{suffix}"), btn("🚀 Deploy Logs", f"runtime_logs{suffix}")],
         [btn("📊 Runtime Stats", f"runtime_stats{suffix}"), btn("🔧 Setup Variables", f"edit_vars{suffix}")],
         [btn("🌐 Change Region", f"change_region{suffix}"), btn("🌍 Domain Manager", f"domain_manager{suffix}")],
         [btn("🔄 Restart Bot", f"restart_bot{suffix}"), btn("⏹ Stop Bot", f"stop_bot{suffix}")],
