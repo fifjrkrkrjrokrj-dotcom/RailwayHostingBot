@@ -12,6 +12,7 @@ from bot.keyboards.main import (
     support_keyboard, token_stats_keyboard, region_selection_keyboard,
     domain_manager_keyboard, domain_delete_keyboard,
 )
+from telegram import InlineKeyboardMarkup
 from bot.deployment.engine import deployment_engine
 from bot.utils.formatters import format_uptime, format_variables_for_display
 from railway.token_manager import token_manager
@@ -192,10 +193,7 @@ async def cb_my_bot(client: Client, query: CallbackQuery):
             await database.update_user(user_id, {"active_management_id": dep["deployment_id"]})
     else:
         deps = await database.get_all_user_deployments(user_id)
-        if len(deps) == 1:
-            dep = deps[0]
-            await database.update_user(user_id, {"active_management_id": dep["deployment_id"]})
-        elif len(deps) > 1:
+        if len(deps) >= 1:
             from bot.keyboards.main import btn
             buttons = []
             for d in deps:

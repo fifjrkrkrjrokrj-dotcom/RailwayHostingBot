@@ -178,7 +178,8 @@ async def rename_state_filter(_, __, message: Message):
         return False
     user_id = message.from_user.id
     user = await database.get_user(user_id)
-    return bool(user and user.get("current_state", "").startswith("rename_bot_"))
+    state = user.get("current_state") if user else None
+    return bool(state and state.startswith("rename_bot_"))
 
 rename_state_filter = filters.create(rename_state_filter)
 
