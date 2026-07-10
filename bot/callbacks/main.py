@@ -409,6 +409,14 @@ async def cb_updates(client: Client, query: CallbackQuery):
     )
     await query.answer()
 
+async def cb_support(client: Client, query: CallbackQuery):
+    await query.message.edit_text(
+        "<blockquote><b>📞 sᴜᴘᴘᴏʀᴛ ᴄᴇɴᴛᴇʀ</b></blockquote>\n\n"
+        "<b>ɴᴇᴇᴅ ʜᴇʟᴘ? ᴄʜᴏᴏsᴇ ᴀɴ ᴏᴘᴛɪᴏɴ ʙᴇʟᴏᴡ.</b>",
+        reply_markup=support_keyboard(),
+    )
+    await query.answer()
+
 
 # --- LOGS AUTO-REFRESH SYSTEM ---
 ACTIVE_REFRESHES = {}
