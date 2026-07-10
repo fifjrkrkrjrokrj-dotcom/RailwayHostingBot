@@ -74,6 +74,84 @@ Message.read = patched_message_read
 
 from pyrogram.types import Message as PyMessage, CallbackQuery as PyCallbackQuery
 
+# --- MOCKED MESSAGE CLASS FOR ROBUST COMPATIBILITY ---
+class MockedMessage:
+    def __init__(self, client, chat_id, message_id):
+        self._client = client
+        self.chat = type('MockChat', (), {'id': chat_id})()
+        self.id = message_id
+
+    async def edit_text(self, text, reply_markup=None, **kwargs):
+        client = self._client
+        if client is None:
+            try:
+                from pyrogram import Client
+                if Client._instances:
+                    client = Client._instances[0]
+            except Exception:
+                pass
+        
+        if client:
+            return await client.edit_message_text(
+                chat_id=self.chat.id,
+                message_id=self.id,
+                text=text,
+                reply_markup=reply_markup,
+                **kwargs
+            )
+        else:
+            import aiohttp
+            from bot.config.settings import settings
+            payload = {
+                "chat_id": self.chat.id,
+                "message_id": self.id,
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": kwargs.get("disable_web_page_preview", False)
+            }
+            if reply_markup is not None:
+                if hasattr(reply_markup, "to_dict"):
+                    payload["reply_markup"] = reply_markup.to_dict()
+                elif isinstance(reply_markup, dict):
+                    payload["reply_markup"] = reply_markup
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/editMessageText", json=payload) as resp:
+                        if resp.status == 200:
+                            return self
+            except Exception as e:
+                logging.getLogger(__name__).error(f"MockedMessage fallback edit_text failed: {e}")
+            return self
+
+    async def delete(self, *args, **kwargs):
+        client = self._client
+        if client is None:
+            try:
+                from pyrogram import Client
+                if Client._instances:
+                    client = Client._instances[0]
+            except Exception:
+                pass
+        if client:
+            return await client.delete_messages(
+                chat_id=self.chat.id,
+                message_ids=self.id
+            )
+        else:
+            import aiohttp
+            from bot.config.settings import settings
+            payload = {
+                "chat_id": self.chat.id,
+                "message_id": self.id
+            }
+            try:
+                async with aiohttp.ClientSession() as session:
+                    await session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/deleteMessage", json=payload)
+            except Exception as e:
+                logging.getLogger(__name__).error(f"MockedMessage fallback delete failed: {e}")
+            return True
+
+
 # --- PATCH MESSAGE & CALLBACK REPLY/EDIT FOR FALLBACK AND DEFAULT BUTTONS ---
 
 _original_send_message = Client.send_message
@@ -106,7 +184,9 @@ async def _patched_send_message(self, chat_id, text, *args, **kwargs):
             async with aiohttp.ClientSession() as session:
                 async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage", json=payload) as resp:
                     if resp.status == 200:
-                        return None
+                        data = await resp.json()
+                        msg_id = data.get("result", {}).get("message_id")
+                        return MockedMessage(self, chat_id, msg_id)
                     else:
                         err_text = await resp.text()
                         logging.getLogger(__name__).error(f"Fallback send_message failed: {resp.status} - {err_text}")
@@ -133,7 +213,9 @@ async def _patched_send_message(self, chat_id, text, *args, **kwargs):
             async with aiohttp.ClientSession() as session:
                 async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage", json=payload) as resp:
                     if resp.status == 200:
-                        return None
+                        data = await resp.json()
+                        msg_id = data.get("result", {}).get("message_id")
+                        return MockedMessage(self, chat_id, msg_id)
         except Exception as api_err:
             logging.getLogger(__name__).error(f"Fallback send_message after failure failed: {api_err}")
         raise e
@@ -163,7 +245,10 @@ async def _patched_reply_text(self, text, reply_markup=None, **kwargs):
             async with aiohttp.ClientSession() as session:
                 async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage", json=payload) as resp:
                     if resp.status == 200:
-                        return None
+                        data = await resp.json()
+                        msg_id = data.get("result", {}).get("message_id")
+                        client = getattr(self, "_client", None)
+                        return MockedMessage(client, self.chat.id, msg_id)
         except Exception as api_err:
             logging.getLogger(__name__).error(f"Fallback reply_text failed: {api_err}")
 
@@ -187,7 +272,10 @@ async def _patched_reply_text(self, text, reply_markup=None, **kwargs):
             async with aiohttp.ClientSession() as session:
                 async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage", json=payload) as resp:
                     if resp.status == 200:
-                        return None
+                        data = await resp.json()
+                        msg_id = data.get("result", {}).get("message_id")
+                        client = getattr(self, "_client", None)
+                        return MockedMessage(client, self.chat.id, msg_id)
         except Exception as api_err:
             logging.getLogger(__name__).error(f"Fallback reply_text after failure failed: {api_err}")
         raise e
@@ -218,7 +306,10 @@ async def _patched_edit_text(self, text, reply_markup=None, **kwargs):
             async with aiohttp.ClientSession() as session:
                 async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/editMessageText", json=payload) as resp:
                     if resp.status == 200:
-                        return None
+                        data = await resp.json()
+                        msg_id = data.get("result", {}).get("message_id")
+                        client = getattr(self, "_client", None)
+                        return MockedMessage(client, self.chat.id, msg_id)
         except Exception as api_err:
             logging.getLogger(__name__).error(f"Fallback edit_text failed: {api_err}")
 
@@ -243,7 +334,10 @@ async def _patched_edit_text(self, text, reply_markup=None, **kwargs):
             async with aiohttp.ClientSession() as session:
                 async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/editMessageText", json=payload) as resp:
                     if resp.status == 200:
-                        return None
+                        data = await resp.json()
+                        msg_id = data.get("result", {}).get("message_id")
+                        client = getattr(self, "_client", None)
+                        return MockedMessage(client, self.chat.id, msg_id)
         except Exception as api_err:
             logging.getLogger(__name__).error(f"Fallback edit_text after failure failed: {api_err}")
         raise e
@@ -275,7 +369,10 @@ async def _patched_edit_message_text(self, text, reply_markup=None, **kwargs):
             async with aiohttp.ClientSession() as session:
                 async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/editMessageText", json=payload) as resp:
                     if resp.status == 200:
-                        return None
+                        data = await resp.json()
+                        msg_id = data.get("result", {}).get("message_id") if isinstance(data.get("result"), dict) else self.message.id
+                        client = getattr(self, "_client", None)
+                        return MockedMessage(client, self.message.chat.id, msg_id)
         except Exception as api_err:
             logging.getLogger(__name__).error(f"Fallback edit_message_text failed: {api_err}")
 
@@ -300,7 +397,10 @@ async def _patched_edit_message_text(self, text, reply_markup=None, **kwargs):
             async with aiohttp.ClientSession() as session:
                 async with session.post(f"https://api.telegram.org/bot{settings.BOT_TOKEN}/editMessageText", json=payload) as resp:
                     if resp.status == 200:
-                        return None
+                        data = await resp.json()
+                        msg_id = data.get("result", {}).get("message_id") if isinstance(data.get("result"), dict) else self.message.id
+                        client = getattr(self, "_client", None)
+                        return MockedMessage(client, self.message.chat.id, msg_id)
         except Exception as api_err:
             logging.getLogger(__name__).error(f"Fallback edit_message_text after failure failed: {api_err}")
         raise e
