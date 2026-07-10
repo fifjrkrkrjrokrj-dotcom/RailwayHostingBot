@@ -74,12 +74,19 @@ class DeploymentWorker:
                     await database.disable_token(token_doc["token"])
                     continue
                 info = await client.get_account_info()
-                usage = info.get("me", {}).get("projectUsage", {})
-                used = usage.get("used", 0)
-                limit = usage.get("limit", 5)
-                credits = limit - used
+                workspaces = info.get("me", {}).get("workspaces", [])
+                credits = 0.0
+                if workspaces:
+                    customer = workspaces[0].get("customer", {})
+                    credits = customer.get("remainingUsageCreditBalance")
+                    if credits is None:
+                        credit_bal = customer.get("creditBalance", -5.0)
+                        credits = abs(credit_bal) if credit_bal is not None else 5.0
+                else:
+                    credits = 5.0
+                
                 if credits <= 0:
-                    logger.warning(f"Token {token_doc['token'][:8]}... out of credits")
+                    logger.warning(f"Token {token_doc['token'][:8]}... out of credits ({credits})")
                     await database.disable_token(token_doc["token"])
                     continue
                 await database.db.railway_tokens.update_one(

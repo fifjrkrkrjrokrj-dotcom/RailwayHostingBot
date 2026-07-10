@@ -69,6 +69,15 @@ class RailwayClient:
                 id
                 email
                 name
+                workspaces {
+                    id
+                    name
+                    customer {
+                        creditBalance
+                        remainingUsageCreditBalance
+                        currentUsage
+                    }
+                }
             }
         }
         """

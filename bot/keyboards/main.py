@@ -57,6 +57,7 @@ def my_bot_keyboard(has_deployment: bool = False, deployment_id: str = None) -> 
         [btn("🔄 Restart Bot", f"restart_bot{suffix}"), btn("⏹ Stop Bot", f"stop_bot{suffix}")],
         [btn("🗑 Delete Bot", f"delete_bot{suffix}"), btn("🌍 View URL", f"view_url{suffix}")],
         [btn("📥 Download Logs", f"download_logs{suffix}"), btn("🔄 Check Repo Update", f"redeploy{suffix}")],
+        [btn("✏ Rename Dashboard", f"rename_bot{suffix}")],
         [btn("◀ Back to Bots List", "my_bot")],
     ]
     return InlineKeyboardMarkup(buttons)

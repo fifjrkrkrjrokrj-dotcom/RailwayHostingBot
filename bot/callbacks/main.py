@@ -35,6 +35,9 @@ async def callback_handler(client: Client, query: CallbackQuery):
     data = query.data
     msg = query.message
 
+    if not data.startswith("rename_bot"):
+        await database.update_user(user_id, {"current_state": None})
+
     handlers = {
         "main_menu": cb_main_menu,
         "deploy_menu": cb_deploy_menu,
@@ -95,6 +98,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         "dom_delete_menu": cb_dom_delete_menu,
         "download_logs": cb_download_logs,
         "redeploy": cb_redeploy,
+        "rename_bot": cb_rename_bot,
     }
 
     matched_prefix = None
@@ -196,7 +200,8 @@ async def cb_my_bot(client: Client, query: CallbackQuery):
             buttons = []
             for d in deps:
                 status_emoji = "🟢" if d.get("status") == "running" else "🟡" if d.get("status") == "deploying" else "🔴"
-                label = f"{status_emoji} {d.get('framework', 'Bot')} ({d['deployment_id'][:8]})"
+                name = d.get("dashboard_name") or f"{d.get('framework', 'Bot')} ({d['deployment_id'][:8]})"
+                label = f"{status_emoji} {name}"
                 buttons.append([btn(label, f"my_bot_{d['deployment_id']}")])
             buttons.append([btn("🚀 Deploy New Bot", "deploy_menu")])
             buttons.append([btn("◀ Back", "main_menu")])
@@ -224,10 +229,34 @@ async def cb_my_bot(client: Client, query: CallbackQuery):
 
         # Get token details and show credits
         token_doc = await database.get_railway_token(dep["railway_token"])
+        if token_doc:
+            try:
+                # Live credit update
+                r_client = RailwayClient(token_doc["token"])
+                info = await r_client.get_account_info()
+                workspaces = info.get("me", {}).get("workspaces", [])
+                if workspaces:
+                    customer = workspaces[0].get("customer", {})
+                    credits = customer.get("remainingUsageCreditBalance")
+                    if credits is None:
+                        credit_bal = customer.get("creditBalance", -5.0)
+                        credits = abs(credit_bal) if credit_bal is not None else 5.0
+                    
+                    # Update database with the live credit
+                    await database.db.railway_tokens.update_one(
+                        {"token": token_doc["token"]},
+                        {"$set": {"credits": credits}}
+                    )
+                    token_doc["credits"] = credits
+                await r_client.close()
+            except Exception as e:
+                logger.error(f"Failed to fetch live credits for token: {e}")
+
         credits_str = f"${token_doc['credits']:.2f}" if (token_doc and "credits" in token_doc) else "N/A"
+        bot_title = dep.get("dashboard_name") or f"{framework} ({dep['deployment_id'][:8]})"
 
         text = (
-            f"<blockquote><b>🤖 ʏᴏᴜʀ ʙᴏᴛ</b></blockquote>\n\n"
+            f"<blockquote><b>🤖 ᴅᴀsʜʙᴏᴀʀᴅ: {bot_title}</b></blockquote>\n\n"
             f"<b>📊 Status:</b> {status}\n"
             f"<b>⚙ Framework:</b> {framework}\n"
             f"<b>🌍 URL:</b> <code>{url}</code>\n"
@@ -1464,3 +1493,24 @@ async def cb_redeploy(client: Client, query: CallbackQuery):
         asyncio.create_task(track_background_redeploy(client, query.message, user_id, dep["deployment_id"], new_dep_id))
     else:
         await query.message.edit_text("<b>❌ Failed to trigger redeployment on Railway.</b>", reply_markup=my_bot_keyboard(True, dep["deployment_id"]))
+
+
+async def cb_rename_bot(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    dep = await get_deployment_from_callback(query, user_id)
+    if not dep:
+        await query.answer("No active deployment")
+        return
+    
+    # Set user state in user doc
+    await database.update_user(user_id, {"current_state": f"rename_bot_{dep['deployment_id']}"})
+    
+    from bot.keyboards.main import btn
+    await query.message.edit_text(
+        f"<blockquote><b>✏️ ʀᴇɴᴀᴍᴇ ᴅᴀsʜʙᴏᴀʀᴅ</b></blockquote>\n\n"
+        f"<b>Current Name:</b> <code>{dep.get('dashboard_name', 'None')}</code>\n\n"
+        f"<b>Please send the new name for this bot's dashboard in the chat.</b>\n"
+        f"<i>Maximum length: 30 characters.</i>",
+        reply_markup=InlineKeyboardMarkup([[btn("◀ Back to Bot", f"my_bot_{dep['deployment_id']}")]])
+    )
+    await query.answer()

@@ -171,3 +171,45 @@ async def handle_zip_upload(client: Client, message: Message):
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
+
+
+async def rename_state_filter(_, __, message: Message):
+    if not message.from_user:
+        return False
+    user_id = message.from_user.id
+    user = await database.get_user(user_id)
+    return bool(user and user.get("current_state", "").startswith("rename_bot_"))
+
+rename_state_filter = filters.create(rename_state_filter)
+
+
+@Client.on_message(filters.text & filters.private & rename_state_filter)
+async def handle_rename_state(client: Client, message: Message):
+    user_id = message.from_user.id
+    user = await database.get_user(user_id)
+    state = user.get("current_state")
+    deployment_id = state[11:]
+    new_name = message.text.strip()
+    
+    # Validate name
+    if not new_name:
+        await message.reply_text("<b>❌ Name cannot be empty. Please send a valid name:</b>")
+        return
+    if len(new_name) > 30:
+        await message.reply_text("<b>❌ Name is too long. Max 30 characters. Please try again:</b>")
+        return
+        
+    dep = await database.get_deployment(deployment_id)
+    if not dep:
+        await message.reply_text("<b>❌ Bot deployment not found.</b>")
+        await database.update_user(user_id, {"current_state": None})
+        return
+        
+    # Update name in DB
+    await database.update_deployment(deployment_id, {"dashboard_name": new_name})
+    await database.update_user(user_id, {"current_state": None})
+    
+    await message.reply_text(
+        f"<b>✅ Dashboard name updated to:</b> <code>{new_name}</code>",
+        reply_markup=my_bot_keyboard(True, deployment_id)
+    )
