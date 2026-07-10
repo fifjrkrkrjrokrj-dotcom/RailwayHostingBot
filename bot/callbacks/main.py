@@ -188,10 +188,12 @@ async def cb_my_bot(client: Client, query: CallbackQuery):
             selected_dep_id = potential_uuid
 
     if selected_dep_id:
+        await query.answer("Fetching dashboard details...")
         dep = await database.get_deployment(selected_dep_id)
         if dep:
             await database.update_user(user_id, {"active_management_id": dep["deployment_id"]})
     else:
+        await query.answer()
         deps = await database.get_all_user_deployments(user_id)
         if len(deps) >= 1:
             from bot.keyboards.main import btn
@@ -208,7 +210,6 @@ async def cb_my_bot(client: Client, query: CallbackQuery):
                 "<b>Choose a bot to manage:</b>",
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
-            await query.answer()
             return
         else:
             dep = None
@@ -225,8 +226,11 @@ async def cb_my_bot(client: Client, query: CallbackQuery):
         url = dep.get("url", "N/A")
         runtime = time.time() - dep.get("created_at", time.time())
 
-        # Get token details and show credits
+        # Get token details and show credits & usage
         token_doc = await database.get_railway_token(dep["railway_token"])
+        cpu_usage_str = "N/A"
+        ram_usage_str = "N/A"
+        net_usage_str = "N/A"
         if token_doc:
             try:
                 # Live credit update
@@ -246,9 +250,43 @@ async def cb_my_bot(client: Client, query: CallbackQuery):
                         {"$set": {"credits": credits}}
                     )
                     token_doc["credits"] = credits
+
+                # Fetch project usage from Railway API
+                usage_res = await r_client.get_project_usage(dep["project_id"])
+                proj_data = usage_res.get("project") or {}
+                usage_data = proj_data.get("usage") or {}
+                if usage_data:
+                    cpu_val = usage_data.get("cpu")
+                    mem_val = usage_data.get("memory")
+                    net_val = usage_data.get("network")
+
+                    if cpu_val is not None:
+                        if cpu_val < 1.0:
+                            cpu_usage_str = f"{cpu_val * 100:.1f}%"
+                        else:
+                            cpu_usage_str = f"{cpu_val:.1f} cores"
+                    
+                    if mem_val is not None:
+                        if mem_val > 1024 * 1024:
+                            ram_usage_str = f"{mem_val / (1024 * 1024):.1f} MB"
+                        elif mem_val > 1024:
+                            ram_usage_str = f"{mem_val / 1024:.1f} KB"
+                        else:
+                            ram_usage_str = f"{mem_val:.1f} Bytes"
+                    
+                    if net_val is not None:
+                        if net_val > 1024 * 1024 * 1024:
+                            net_usage_str = f"{net_val / (1024 * 1024 * 1024):.1f} GB"
+                        elif net_val > 1024 * 1024:
+                            net_usage_str = f"{net_val / (1024 * 1024):.1f} MB"
+                        elif net_val > 1024:
+                            net_usage_str = f"{net_val / 1024:.1f} KB"
+                        else:
+                            net_usage_str = f"{net_val:.1f} Bytes"
+
                 await r_client.close()
             except Exception as e:
-                logger.error(f"Failed to fetch live credits for token: {e}")
+                logger.error(f"Failed to fetch live credits/usage for token: {e}")
 
         credits_str = f"${token_doc['credits']:.2f}" if (token_doc and "credits" in token_doc) else "N/A"
         bot_title = dep.get("dashboard_name") or f"{framework} ({dep['deployment_id'][:8]})"
@@ -261,13 +299,17 @@ async def cb_my_bot(client: Client, query: CallbackQuery):
             f"<b>⏱ Runtime:</b> {format_uptime(runtime)}\n"
             f"<b>🔄 Restarts:</b> {dep.get('restart_count', 0)}\n"
             f"<b>💳 Railway Credit:</b> <code>{credits_str}</code>\n\n"
+            f"<blockquote><b>📈 ʀᴀɪʟᴡᴀʏ ᴜsᴀɢᴇ</b></blockquote>\n"
+            f"<b>💻 CPU Usage:</b> <code>{cpu_usage_str}</code>\n"
+            f"<b>🧠 RAM Usage:</b> <code>{ram_usage_str}</code>\n"
+            f"<b>🌐 Network Usage:</b> <code>{net_usage_str}</code>\n\n"
             f"<i>Selected Bot: <code>{dep['deployment_id'][:8]}</code></i>"
         )
         await query.message.edit_text(text, reply_markup=my_bot_keyboard(True, dep["deployment_id"]))
-    await query.answer()
 
 
 async def cb_profile(client: Client, query: CallbackQuery):
+    await query.answer()
     user_id = query.from_user.id
     user = await database.get_user(user_id)
     if not user:
@@ -286,15 +328,15 @@ async def cb_profile(client: Client, query: CallbackQuery):
         f"<b>⭐ Points:</b> {user.get('points', 0)}"
     )
     await query.message.edit_text(text, reply_markup=start_keyboard(user_id in settings.OWNER_IDS))
-    await query.answer()
 
 
 async def cb_plans(client: Client, query: CallbackQuery):
-    await query.message.edit_text(PLANS_TEXT, reply_markup=start_keyboard(query.from_user.id in settings.OWNER_IDS))
     await query.answer()
+    await query.message.edit_text(PLANS_TEXT, reply_markup=start_keyboard(query.from_user.id in settings.OWNER_IDS))
 
 
 async def cb_analytics(client: Client, query: CallbackQuery):
+    await query.answer()
     total_users = await database.count_users()
     active_deployments = await database.count_active_deployments()
     total_deployments = await database.count_total_deployments()
@@ -315,12 +357,11 @@ async def cb_analytics(client: Client, query: CallbackQuery):
         avg_uptime="N/A",
     )
     await query.message.edit_text(text, reply_markup=start_keyboard(query.from_user.id in settings.OWNER_IDS))
-    await query.answer()
 
 
 async def cb_help(client: Client, query: CallbackQuery):
-    await query.message.edit_text(HELP_TEXT, reply_markup=start_keyboard(query.from_user.id in settings.OWNER_IDS))
     await query.answer()
+    await query.message.edit_text(HELP_TEXT, reply_markup=start_keyboard(query.from_user.id in settings.OWNER_IDS))
 
 
 async def cb_referral(client: Client, query: CallbackQuery):
@@ -408,6 +449,7 @@ async def cb_runtime_stats(client: Client, query: CallbackQuery):
     if not dep:
         await query.answer("No active deployment")
         return
+    await query.answer("Fetching stats...")
     stats = await deployment_engine.get_runtime_stats(dep["deployment_id"])
     text = (
         f"<blockquote><b>📊 ʀᴜɴᴛɪᴍᴇ sᴛᴀᴛs</b></blockquote>\n\n"
@@ -420,7 +462,6 @@ async def cb_runtime_stats(client: Client, query: CallbackQuery):
         f"<i>Selected Bot: <code>{dep['deployment_id'][:8]}</code></i>"
     )
     await query.message.edit_text(text, reply_markup=my_bot_keyboard(True, dep["deployment_id"]))
-    await query.answer()
 
 
 async def cb_edit_vars(client: Client, query: CallbackQuery):
@@ -975,36 +1016,42 @@ async def cb_confirm(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
 
     if action.startswith("stop"):
+        await query.answer("Stopping bot...")
         dep = await get_deployment_from_callback(query, user_id)
         if dep:
             await deployment_engine.stop_deployment(dep["deployment_id"])
             await query.message.edit_text("<b>✅ Bot stopped successfully</b>", reply_markup=my_bot_keyboard(False, dep["deployment_id"]))
     elif action.startswith("delete"):
+        await query.answer("Deleting bot...")
         dep = await get_deployment_from_callback(query, user_id)
         if dep:
             await deployment_engine.delete_deployment(dep["deployment_id"])
             await query.message.edit_text("<b>✅ Bot deleted permanently</b>", reply_markup=my_bot_keyboard(False))
     elif action.startswith("restart"):
+        await query.answer("Restarting bot...")
         dep = await get_deployment_from_callback(query, user_id)
         if dep:
             await deployment_engine.restart_deployment(dep["deployment_id"])
             await query.message.edit_text("<b>✅ Bot restarted successfully</b>", reply_markup=my_bot_keyboard(True, dep["deployment_id"]))
     elif action.startswith("var_reset"):
+        await query.answer("Resetting variables...")
         dep = await get_deployment_from_callback(query, user_id)
         if dep:
             await database.update_deployment(dep["deployment_id"], {"variables": {}})
             await query.message.edit_text("<b>✅ Variables reset</b>", reply_markup=variable_keyboard(dep["deployment_id"]))
     elif action == "force_redeploy" and user_id in settings.OWNER_IDS:
+        await query.answer("Force redeploying...")
         await query.message.edit_text("<b>⚡ Force redeploying all deployments...</b>", reply_markup=admin_keyboard())
     elif action == "toggle_maintenance" and user_id in settings.OWNER_IDS:
+        await query.answer()
         settings.MAINTENANCE_MODE = not settings.MAINTENANCE_MODE
         await query.message.edit_text(f"<b>✅ Maintenance mode: {settings.MAINTENANCE_MODE}</b>", reply_markup=admin_keyboard())
     elif action.startswith("deploy_"):
         deploy_id = action[7:]
         from bot.deployment.engine import DEPLOY_CACHE
         if deploy_id not in DEPLOY_CACHE:
-            await query.message.edit_text("<b>❌ Deployment session expired. Please upload again.</b>", reply_markup=deploy_keyboard())
             await query.answer()
+            await query.message.edit_text("<b>❌ Deployment session expired. Please upload again.</b>", reply_markup=deploy_keyboard())
             return
             
         context = DEPLOY_CACHE.pop(deploy_id)
@@ -1013,13 +1060,12 @@ async def cb_confirm(client: Client, query: CallbackQuery):
         asyncio.create_task(track_background_deployment(client, query.message, user_id, context, dep_vars))
         await query.answer("Deployment initiated in background...")
     elif action == "back_deploy":
+        await query.answer()
         await cb_deploy_menu(client, query)
-        return
-
-    await query.answer()
 
 
 async def cb_cancel(client: Client, query: CallbackQuery):
+    await query.answer()
     action = query.data[7:]
     user_id = query.from_user.id
     action_type = action.split("_")[0]
@@ -1030,7 +1076,6 @@ async def cb_cancel(client: Client, query: CallbackQuery):
         await cb_deploy_menu(client, query)
     else:
         await cb_main_menu(client, query)
-    await query.answer()
 
 
 async def cb_change_region(client: Client, query: CallbackQuery):
