@@ -47,6 +47,17 @@ async def handle_github_url(client: Client, message: Message):
         return
 
     url = message.text.strip()
+    from bot.deployment.engine import DEPLOY_CACHE
+    # Check for existing pending deployment
+    existing_pending = [did for did, d in DEPLOY_CACHE.items() if d.get("user_id") == user_id]
+    if existing_pending:
+        await message.reply_text(
+            "<b>⚠ You already have a pending deployment!</b>\n\n"
+            "Please confirm or cancel the existing one before starting a new one.",
+            reply_markup=confirmation_keyboard(f"deploy_{existing_pending[0]}")
+        )
+        return
+
     status_msg = await message.reply_text("<b>🔍 Scanning repository...</b>")
 
     parsed = github_client.parse_github_url(url)
@@ -111,6 +122,16 @@ async def handle_zip_upload(client: Client, message: Message):
     user_id = message.from_user.id
     user = await database.get_user(user_id)
     if not user:
+        return
+
+    from bot.deployment.engine import DEPLOY_CACHE
+    existing_pending = [did for did, d in DEPLOY_CACHE.items() if d.get("user_id") == user_id]
+    if existing_pending:
+        await message.reply_text(
+            "<b>⚠ You already have a pending deployment!</b>\n\n"
+            "Please confirm or cancel the existing one before uploading a new ZIP.",
+            reply_markup=confirmation_keyboard(f"deploy_{existing_pending[0]}")
+        )
         return
 
     doc = message.document

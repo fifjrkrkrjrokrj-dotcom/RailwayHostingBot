@@ -66,17 +66,20 @@ async def handle_single_variable(client: Client, message: Message):
     dep = await database.get_user_deployment(user_id)
     if not dep:
         from bot.deployment.engine import DEPLOY_CACHE
-        for deploy_id, data in DEPLOY_CACHE.items():
-            if data.get("user_id") == user_id:
-                data.setdefault("variables", {}).update(parsed_vars)
-                var_str = "\n".join([f"<b>{k}</b> = <code>{v[:20]}...</code>" for k, v in list(parsed_vars.items())[:5]])
-                if len(parsed_vars) > 5:
-                    var_str += f"\n...and {len(parsed_vars) - 5} more"
-                await message.reply_text(
-                    f"<b>✅ {len(parsed_vars)} Variables added to pending deployment:</b>\n\n{var_str}"
-                )
-                return
-        await message.reply_text("<b>❌ No active deployment found</b>")
+        # Find the LATEST pending cache entry for this user
+        user_entries = [(did, d) for did, d in DEPLOY_CACHE.items() if d.get("user_id") == user_id]
+        if not user_entries:
+            await message.reply_text("<b>❌ No active deployment found</b>")
+            return
+        # Sort by creation order (dict insertion order = FIFO), take latest
+        target_id, target_data = user_entries[-1]
+        target_data.setdefault("variables", {}).update(parsed_vars)
+        var_str = "\n".join([f"<b>{k}</b> = <code>{v[:20]}...</code>" for k, v in list(parsed_vars.items())[:5]])
+        if len(parsed_vars) > 5:
+            var_str += f"\n...and {len(parsed_vars) - 5} more"
+        await message.reply_text(
+            f"<b>✅ {len(parsed_vars)} Variables added to pending deployment:</b>\n\n{var_str}"
+        )
         return
 
     variables = dep.get("variables", {})
