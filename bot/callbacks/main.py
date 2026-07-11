@@ -866,10 +866,11 @@ async def cb_admin_api_health(client: Client, query: CallbackQuery):
     if query.from_user.id not in settings.OWNER_IDS:
         await query.answer("Unauthorized")
         return
-    await query.answer("🩺 Running health checks...", show_alert=True)
-    await query.message.edit_text("<b>🔍 Checking all services...</b>")
+    await query.answer("🩺 Running health checks on ALL tokens...", show_alert=True)
+    await query.message.edit_text("<b>🔍 Checking all services and tokens...</b>")
 
     results = []
+    dead_tokens = []
 
     # 1) MongoDB health
     try:
@@ -878,27 +879,60 @@ async def cb_admin_api_health(client: Client, query: CallbackQuery):
     except Exception as e:
         results.append(("❌", "MongoDB", str(e)))
 
-    # 2) Railway API health (try first available token)
+    # 2) Per-token Railway API health
     tokens = await database.get_all_tokens()
     if tokens:
-        tested = False
-        for tdoc in tokens[:3]:
+        token_results = []
+        for tdoc in tokens:
+            token_preview = f"{tdoc['token'][:12]}..."
             if not tdoc.get("is_active"):
+                token_results.append(("❌", token_preview, "DISABLED"))
                 continue
+            restricted = tdoc.get("is_restricted", False)
             r_client = RailwayClient(tdoc["token"])
             try:
-                info = await r_client.get_account_info()
-                if info.get("me", {}).get("id"):
-                    results.append(("✅", "Railway API", f"Workspaces: {len(info.get('me',{}).get('workspaces',[]))}"))
-                    tested = True
+                info = await asyncio.wait_for(r_client.get_account_info(), timeout=15)
+                me = info.get("me", {})
+                if not me.get("id"):
+                    token_results.append(("❌", token_preview, "Invalid token"))
+                    dead_tokens.append(tdoc)
                     await r_client.close()
-                    break
+                    continue
+                workspaces = me.get("workspaces", [])
+                customer = workspaces[0].get("customer", {}) if workspaces else {}
+                credits = customer.get("remainingUsageCreditBalance") or customer.get("creditBalance", "N/A")
+                if isinstance(credits, (int, float)):
+                    credits = f"${credits:.2f}"
+                cur_deps = tdoc.get("current_deployments", 0)
+                max_deps = tdoc.get("max_deployments", 2)
+                status_icon = "🚫" if restricted else "✅"
+                label = f"{status_icon} {token_preview}"
+                token_results.append((status_icon, label, f"Credits:{credits} Deploy:{cur_deps}/{max_deps}"))
+                await r_client.close()
+            except asyncio.TimeoutError:
+                token_results.append(("⏳", token_preview, "TIMEOUT"))
+                dead_tokens.append(tdoc)
                 await r_client.close()
             except Exception as e:
+                token_results.append(("❌", token_preview, str(e)[:60]))
+                dead_tokens.append(tdoc)
                 await r_client.close()
-                continue
-        if not tested:
-            results.append(("⚠", "Railway API", "No valid token to test"))
+
+        results.append(("🚂", f"Railway Tokens ({len(tokens)})", f"{len([t for t in tokens if t.get('is_active') and not t.get('is_restricted')])} active"))
+        for icon, label, status in token_results:
+            results.append((icon, f"  {label}", status))
+
+        # Auto-disable dead tokens
+        for tdoc in dead_tokens:
+            try:
+                await database.disable_token(tdoc["token"])
+                # Migrate deployments from dead token
+                deps = await database.db.deployments.find({"railway_token": tdoc["token"]}).to_list(None)
+                for dep in deps:
+                    asyncio.create_task(deployment_engine.migrate_deployment(dep["deployment_id"]))
+                results.append(("🔄", f"  ↳ {tdoc['token'][:12]}...", f"{len(deps)} deployment(s) auto-migrating"))
+            except Exception:
+                pass
     else:
         results.append(("⚠", "Railway API", "No tokens configured"))
 
@@ -909,7 +943,7 @@ async def cb_admin_api_health(client: Client, query: CallbackQuery):
     except Exception as e:
         results.append(("❌", "GitHub API", str(e)))
 
-    # 4) Bot uptime
+    # 4) Bot status
     try:
         me = await client.get_me()
         results.append(("✅", "Bot", f"@{me.username} (ID: {me.id})"))
@@ -925,6 +959,9 @@ async def cb_admin_api_health(client: Client, query: CallbackQuery):
     for icon, name, status in results:
         text += f"<b>{icon} {name}:</b> <code>{status}</code>\n"
     text += f"\n<b>Last check:</b> <code>{__import__('datetime').datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</code>"
+
+    if dead_tokens:
+        text += "\n\n<b>⚠ Some tokens were dead — deployments auto-migrating to healthy tokens.</b>"
 
     await query.message.edit_text(text, reply_markup=admin_keyboard())
 
@@ -1023,7 +1060,20 @@ async def cb_toggle_restrict(client: Client, query: CallbackQuery):
         await query.answer("✅ Token unrestricted - now available for deployments", show_alert=True)
     else:
         await database.restrict_token(token)
-        await query.answer("🚫 Token restricted - will not be used for new deployments", show_alert=True)
+        # Delete all workshops/deployments using this token
+        deps = await database.db.deployments.find({"railway_token": token}).to_list(None)
+        deleted_count = 0
+        r_client = RailwayClient(token)
+        for dep in deps:
+            try:
+                await r_client.delete_project(dep["project_id"])
+            except Exception:
+                pass
+            await database.delete_deployment(dep["deployment_id"])
+            await token_manager.release_token(token)
+            deleted_count += 1
+        await r_client.close()
+        await query.answer(f"🚫 Token restricted - {deleted_count} workshop(s) deleted", show_alert=True)
     await cb_admin_restrict_token(client, query)
 
 

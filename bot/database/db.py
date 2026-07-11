@@ -126,7 +126,7 @@ class Database:
         await self.db.railway_tokens.update_one({"token": token}, {"$inc": {"current_deployments": -1}})
 
     async def disable_token(self, token: str):
-        await self.db.railway_tokens.update_one({"token": token}, {"$set": {"is_active": False, "is_available": False}})
+        await self.db.railway_tokens.update_one({"token": token}, {"$set": {"is_active": False, "is_available": False, "current_deployments": 0}})
 
     async def update_token_deployments(self, token: str):
         await self.db.railway_tokens.update_one({"token": token}, {"$inc": {"current_deployments": 1, "total_deployments": 1}})
