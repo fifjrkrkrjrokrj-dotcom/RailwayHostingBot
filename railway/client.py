@@ -184,18 +184,24 @@ class RailwayClient:
             return None
 
     async def create_deployment(self, service_id: str, environment_id: str) -> Optional[str]:
-        query = """
-        mutation CreateDeployment($serviceId: String!, $environmentId: String!) {
-            serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId)
-        }
-        """
-        variables = {"serviceId": service_id, "environmentId": environment_id}
-        try:
-            res = await self._query(query, variables)
-            return res.get("serviceInstanceDeployV2")
-        except Exception as e:
-            logger.error(f"Failed to create deployment: {e}")
-            return None
+        # Try V2 first, fall back to V1
+        for field in ("serviceInstanceDeployV2", "serviceInstanceDeploy", "deploymentCreate"):
+            query = f"""
+            mutation CreateDeployment($serviceId: String!, $environmentId: String!) {{
+                {field}(serviceId: $serviceId, environmentId: $environmentId)
+            }}
+            """
+            variables = {"serviceId": service_id, "environmentId": environment_id}
+            try:
+                res = await self._query(query, variables)
+                dep_id = res.get(field)
+                if dep_id:
+                    return dep_id
+            except Exception as e:
+                logger.warning(f"Deployment mutation '{field}' failed: {str(e)[:80]}")
+                continue
+        logger.error("All deployment mutations failed")
+        return None
 
     async def trigger_deploy(self, service_id: str, environment_id: str) -> bool:
         query = """

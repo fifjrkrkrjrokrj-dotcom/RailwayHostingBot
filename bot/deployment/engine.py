@@ -126,6 +126,7 @@ class DeploymentEngine:
         all_tokens = await database.get_all_tokens()
         max_retries = max(len(all_tokens) * 2, 10)
         retries = 0
+        last_error = "Unknown error"
         while retries < max_retries:
             retries += 1
             token_doc = await token_manager.get_available_token()
@@ -134,64 +135,52 @@ class DeploymentEngine:
                 return {"success": False, "error": "No Railway tokens available", "deployment_id": deployment_id}
 
             client = RailwayClient(token_doc["token"])
+            project_id = None
             try:
                 project_name = f"pbc-{user_id}-{int(time.time())}"
                 project = await client.create_project(project_name)
                 if not project:
                     raise Exception("API returned None")
-                break
-            except Exception as e:
-                terminal.add_error(f"token {token_doc['token'][:5]}... failed ({str(e)[:60]}). switching...")
-                await database.disable_token(token_doc["token"])
-                await token_manager.release_token(token_doc["token"])
-                await client.close()
-                continue
 
-        if retries >= max_retries:
-            terminal.add_error("all tokens exhausted or invalid")
-            return {"success": False, "error": "All Railway tokens exhausted or invalid. Contact admin.", "deployment_id": deployment_id}
+                project_id = project.get("projectCreate", {}).get("id") or str(uuid.uuid4())
+                terminal.add_line(f"project created: {project_id[:8]}...")
 
-        try:
-            project_id = project.get("projectCreate", {}).get("id") or str(uuid.uuid4())
-            terminal.add_line(f"project created: {project_id[:8]}...")
+                env = await client.create_environment(project_id)
+                env_id = env.get("environmentCreate", {}).get("id") or str(uuid.uuid4())
 
-            env = await client.create_environment(project_id)
-            env_id = env.get("environmentCreate", {}).get("id") or str(uuid.uuid4())
+                repo_slug = f"{parsed['owner']}/{parsed['repo']}"
+                service = await client.create_service(project_id, "bot-service", source_repo=repo_slug)
+                service_id = service.get("serviceCreate", {}).get("id") or str(uuid.uuid4())
+                terminal.add_line("service created and linked to github repository")
 
-            # Link GitHub source repo to service
-            repo_slug = f"{parsed['owner']}/{parsed['repo']}"
-            service = await client.create_service(project_id, "bot-service", source_repo=repo_slug)
-            service_id = service.get("serviceCreate", {}).get("id") or str(uuid.uuid4())
-            terminal.add_line("service created and linked to github repository")
+                from bot.deployment.engine import DEPLOY_CACHE
+                region_code = None
+                for d_id, d_data in DEPLOY_CACHE.items():
+                    if d_data.get("user_id") == user_id:
+                        region_code = d_data.get("region")
+                        break
 
-            # Check if region is set in DEPLOY_CACHE
-            from bot.deployment.engine import DEPLOY_CACHE
-            region_code = None
-            for d_id, d_data in DEPLOY_CACHE.items():
-                if d_data.get("user_id") == user_id:
-                    region_code = d_data.get("region")
-                    break
+                if region_code:
+                    terminal.add_line(f"configuring server region to {region_code}...")
+                    await client.update_service_instance_region(service_id, env_id, region_code)
 
-            if region_code:
-                terminal.add_line(f"configuring server region to {region_code}...")
-                await client.update_service_instance_region(service_id, env_id, region_code)
+                if variables:
+                    terminal.add_line("setting environment variables...")
+                    for key, value in variables.items():
+                        await client.set_environment_variable(project_id, env_id, key, value, service_id=service_id)
 
-            if variables:
-                terminal.add_line("setting environment variables...")
-                for key, value in variables.items():
-                    await client.set_environment_variable(project_id, env_id, key, value, service_id=service_id)
+                terminal.add_line("generating railway public domain...")
+                domain_doc = await client.create_service_domain(service_id, env_id)
+                if domain_doc and domain_doc.get("domain"):
+                    dep_url = f"https://{domain_doc['domain']}"
+                    terminal.add_line(f"public domain created: {dep_url}")
+                else:
+                    dep_url = f"https://{project_id}.up.railway.app"
 
-            # Generate public domain automatically
-            terminal.add_line("generating railway public domain...")
-            domain_doc = await client.create_service_domain(service_id, env_id)
-            if domain_doc and domain_doc.get("domain"):
-                dep_url = f"https://{domain_doc['domain']}"
-                terminal.add_line(f"public domain created: {dep_url}")
-            else:
-                dep_url = f"https://{project_id}.up.railway.app"
+                dep_id = await client.create_deployment(service_id, env_id)
+                if not dep_id:
+                    raise Exception("Deployment creation failed on Railway API")
 
-            dep_id = await client.create_deployment(service_id, env_id)
-            if dep_id:
                 terminal.add_line(f"deployment created: {dep_id[:8]}...")
                 terminal.add_line("build started...")
 
@@ -229,18 +218,22 @@ class DeploymentEngine:
                     },
                 )
 
+                await client.close()
                 return {"success": True, "deployment_id": deployment_id, "url": dep_url, "framework": scan_result["framework"]}
-            else:
-                terminal.add_error("deployment creation failed")
+            except Exception as e:
+                last_error = str(e)
+                terminal.add_error(f"token {token_doc['token'][:5]}... failed ({str(e)[:80]}). switching...")
+                try:
+                    await client.delete_project(project_id)
+                except Exception:
+                    pass
+                await database.disable_token(token_doc["token"])
                 await token_manager.release_token(token_doc["token"])
-                return {"success": False, "error": "Deployment creation failed", "deployment_id": deployment_id}
-        except Exception as e:
-            logger.exception("Deployment error")
-            terminal.add_error(f"error: {str(e)}")
-            await token_manager.release_token(token_doc["token"])
-            return {"success": False, "error": str(e), "deployment_id": deployment_id}
-        finally:
-            await client.close()
+                await client.close()
+                continue
+
+        terminal.add_error(f"all tokens exhausted. last error: {last_error}")
+        return {"success": False, "error": f"All Railway tokens exhausted. Last error: {last_error}", "deployment_id": deployment_id}
 
     async def deploy_from_zip(self, user_id: int, zip_data: bytes, variables: dict = None) -> dict:
         deployment_id = str(uuid.uuid4())
@@ -289,9 +282,7 @@ class DeploymentEngine:
             terminal.add_line("requirements.txt detected")
 
         terminal.add_line("finding available railway token...")
-        project = None
-        token_doc = None
-        client = None
+        last_error = "Unknown error"
 
         all_tokens = await database.get_all_tokens()
         max_retries = max(len(all_tokens) * 2, 10)
@@ -304,158 +295,151 @@ class DeploymentEngine:
                 return {"success": False, "error": "No Railway tokens available", "deployment_id": deployment_id}
 
             client = RailwayClient(token_doc["token"])
+            project_id = None
+            extract_path = None
             try:
                 project_name = f"pbc-{user_id}-{int(time.time())}"
                 project = await client.create_project(project_name)
                 if not project:
                     raise Exception("API returned None")
-                break
+
+                project_id = project.get("projectCreate", {}).get("id") or str(uuid.uuid4())
+                env = await client.create_environment(project_id)
+                env_id = env.get("environmentCreate", {}).get("id") or str(uuid.uuid4())
+                service = await client.create_service(project_id, "bot-service")
+                service_id = service.get("serviceCreate", {}).get("id") or str(uuid.uuid4())
+
+                from bot.deployment.engine import DEPLOY_CACHE
+                region_code = None
+                for d_id, d_data in DEPLOY_CACHE.items():
+                    if d_data.get("user_id") == user_id:
+                        region_code = d_data.get("region")
+                        break
+
+                if region_code:
+                    terminal.add_line(f"configuring server region to {region_code}...")
+                    await client.update_service_instance_region(service_id, env_id, region_code)
+
+                if variables:
+                    terminal.add_line("setting environment variables...")
+                    for key, value in variables.items():
+                        await client.set_environment_variable(project_id, env_id, key, value, service_id=service_id)
+
+                extract_path = os.path.join(settings.TEMP_DIR, deployment_id)
+                os.makedirs(extract_path, exist_ok=True)
+                await github_client.extract_zip_to_path(zip_data, extract_path)
+                terminal.add_line("source code extracted")
+
+                terminal.add_line("uploading source code to railway via cli...")
+                cmd = f'railway up --detach --json --project "{project_id}" --service "{service_id}" --environment "{env_id}"'
+                env_vars = os.environ.copy()
+                env_vars["RAILWAY_TOKEN"] = token_doc["token"]
+
+                proc = await asyncio.create_subprocess_shell(
+                    cmd,
+                    cwd=extract_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env_vars
+                )
+                stdout_bytes, stderr_bytes = await proc.communicate()
+
+                if proc.returncode != 0:
+                    err_msg = stderr_bytes.decode("utf-8", errors="ignore")
+                    raise Exception(f"Railway CLI upload failed: {err_msg}")
+
+                import re
+                dep_id = None
+                try:
+                    stdout_str = stdout_bytes.decode("utf-8", errors="ignore")
+                    import json
+                    try:
+                        data = json.loads(stdout_str)
+                        dep_id = data.get("deploymentId") or data.get("id")
+                    except Exception:
+                        match = re.search(r'"(?:deployment)?Id"\s*:\s*"([^"]+)"', stdout_str)
+                        if match:
+                            dep_id = match.group(1)
+                except Exception:
+                    pass
+
+                if not dep_id:
+                    dep_id = str(uuid.uuid4())[:12]
+
+                terminal.add_line("generating railway public domain...")
+                domain_doc = await client.create_service_domain(service_id, env_id)
+                if domain_doc and domain_doc.get("domain"):
+                    dep_url = f"https://{domain_doc['domain']}"
+                    terminal.add_line(f"public domain created: {dep_url}")
+                else:
+                    dep_url = f"https://{project_id}.up.railway.app"
+
+                terminal.add_line(f"deployment created: {dep_id[:8]}...")
+                terminal.add_line("build started...")
+
+                dep_record = {
+                    "deployment_id": deployment_id,
+                    "user_id": user_id,
+                    "project_id": project_id,
+                    "environment_id": env_id,
+                    "service_id": service_id,
+                    "railway_deployment_id": dep_id,
+                    "railway_token": token_doc["token"],
+                    "repo_url": "ZIP Upload",
+                    "framework": framework,
+                    "startup_file": startup_file,
+                    "status": "deploying",
+                    "url": dep_url,
+                    "variables": variables or {},
+                    "created_at": time.time(),
+                    "last_active": time.time(),
+                    "restart_count": 0,
+                    "total_runtime": 0,
+                }
+                await database.create_deployment(dep_record)
+
+                try:
+                    zips_dir = os.path.join("data", "zips")
+                    os.makedirs(zips_dir, exist_ok=True)
+                    zip_save_path = os.path.join(zips_dir, f"{deployment_id}.zip")
+                    with open(zip_save_path, "wb") as f:
+                        f.write(zip_data)
+                except Exception as zip_err:
+                    logger.error(f"Failed to save zip backup: {zip_err}")
+
+                await self._send_log(
+                    "new_deployment",
+                    {
+                        "user_id": user_id,
+                        "deployment_id": deployment_id,
+                        "repo": "ZIP Upload",
+                        "framework": framework,
+                        "url": dep_url,
+                        "token": f"TOKEN #{token_doc.get('priority', 0)}",
+                        "variables": str(variables or {}),
+                    },
+                )
+
+                if extract_path:
+                    shutil.rmtree(extract_path, ignore_errors=True)
+                await client.close()
+                return {"success": True, "deployment_id": deployment_id, "url": dep_url, "framework": framework}
             except Exception as e:
-                terminal.add_error(f"token {token_doc['token'][:5]}... failed ({str(e)[:60]}). switching...")
+                last_error = str(e)
+                terminal.add_error(f"token {token_doc['token'][:5]}... failed ({str(e)[:80]}). switching...")
+                try:
+                    await client.delete_project(project_id)
+                except Exception:
+                    pass
+                if extract_path:
+                    shutil.rmtree(extract_path, ignore_errors=True)
                 await database.disable_token(token_doc["token"])
                 await token_manager.release_token(token_doc["token"])
                 await client.close()
                 continue
 
-        if retries >= max_retries:
-            terminal.add_error("all tokens exhausted or invalid")
-            return {"success": False, "error": "All Railway tokens exhausted or invalid. Contact admin.", "deployment_id": deployment_id}
-
-        try:
-            project_id = project.get("projectCreate", {}).get("id") or str(uuid.uuid4())
-            env = await client.create_environment(project_id)
-            env_id = env.get("environmentCreate", {}).get("id") or str(uuid.uuid4())
-            service = await client.create_service(project_id, "bot-service")
-            service_id = service.get("serviceCreate", {}).get("id") or str(uuid.uuid4())
-
-            # Check if region is set in DEPLOY_CACHE
-            from bot.deployment.engine import DEPLOY_CACHE
-            region_code = None
-            for d_id, d_data in DEPLOY_CACHE.items():
-                if d_data.get("user_id") == user_id:
-                    region_code = d_data.get("region")
-                    break
-
-            if region_code:
-                terminal.add_line(f"configuring server region to {region_code}...")
-                await client.update_service_instance_region(service_id, env_id, region_code)
-
-            if variables:
-                terminal.add_line("setting environment variables...")
-                for key, value in variables.items():
-                    await client.set_environment_variable(project_id, env_id, key, value, service_id=service_id)
-
-            # Extract ZIP locally
-            extract_path = os.path.join(settings.TEMP_DIR, deployment_id)
-            os.makedirs(extract_path, exist_ok=True)
-            await github_client.extract_zip_to_path(zip_data, extract_path)
-            terminal.add_line("source code extracted")
-
-            # Deploy source code using Railway CLI
-            terminal.add_line("uploading source code to railway via cli...")
-            cmd = f'railway up --detach --json --project "{project_id}" --service "{service_id}" --environment "{env_id}"'
-            env_vars = os.environ.copy()
-            env_vars["RAILWAY_TOKEN"] = token_doc["token"]
-            
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                cwd=extract_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env_vars
-            )
-            stdout_bytes, stderr_bytes = await proc.communicate()
-            
-            if proc.returncode != 0:
-                err_msg = stderr_bytes.decode("utf-8", errors="ignore")
-                terminal.add_error(f"Railway CLI upload failed: {err_msg}")
-                await token_manager.release_token(token_doc["token"])
-                return {"success": False, "error": f"Railway CLI upload failed: {err_msg}", "deployment_id": deployment_id}
-
-            import re
-            dep_id = None
-            try:
-                stdout_str = stdout_bytes.decode("utf-8", errors="ignore")
-                import json
-                try:
-                    data = json.loads(stdout_str)
-                    dep_id = data.get("deploymentId") or data.get("id")
-                except Exception:
-                    match = re.search(r'"(?:deployment)?Id"\s*:\s*"([^"]+)"', stdout_str)
-                    if match:
-                        dep_id = match.group(1)
-            except Exception:
-                pass
-
-            if not dep_id:
-                dep_id = str(uuid.uuid4())[:12]
-
-            # Generate public domain automatically
-            terminal.add_line("generating railway public domain...")
-            domain_doc = await client.create_service_domain(service_id, env_id)
-            if domain_doc and domain_doc.get("domain"):
-                dep_url = f"https://{domain_doc['domain']}"
-                terminal.add_line(f"public domain created: {dep_url}")
-            else:
-                dep_url = f"https://{project_id}.up.railway.app"
-
-            terminal.add_line(f"deployment created: {dep_id[:8]}...")
-            terminal.add_line("build started...")
-
-            dep_record = {
-                "deployment_id": deployment_id,
-                "user_id": user_id,
-                "project_id": project_id,
-                "environment_id": env_id,
-                "service_id": service_id,
-                "railway_deployment_id": dep_id,
-                "railway_token": token_doc["token"],
-                "repo_url": "ZIP Upload",
-                "framework": framework,
-                "startup_file": startup_file,
-                "status": "deploying",
-                "url": dep_url,
-                "variables": variables or {},
-                "created_at": time.time(),
-                "last_active": time.time(),
-                "restart_count": 0,
-                "total_runtime": 0,
-            }
-            await database.create_deployment(dep_record)
-
-            # Save source ZIP locally for migrations
-            try:
-                zips_dir = os.path.join("data", "zips")
-                os.makedirs(zips_dir, exist_ok=True)
-                zip_save_path = os.path.join(zips_dir, f"{deployment_id}.zip")
-                with open(zip_save_path, "wb") as f:
-                    f.write(zip_data)
-            except Exception as zip_err:
-                logger.error(f"Failed to save zip backup: {zip_err}")
-
-            await self._send_log(
-                "new_deployment",
-                {
-                    "user_id": user_id,
-                    "deployment_id": deployment_id,
-                    "repo": "ZIP Upload",
-                    "framework": framework,
-                    "url": dep_url,
-                    "token": f"TOKEN #{token_doc.get('priority', 0)}",
-                    "variables": str(variables or {}),
-                },
-            )
-
-            return {"success": True, "deployment_id": deployment_id, "url": dep_url, "framework": framework}
-        except Exception as e:
-            logger.exception("ZIP deploy error")
-            terminal.add_error(f"error: {str(e)}")
-            await token_manager.release_token(token_doc["token"])
-            return {"success": False, "error": str(e), "deployment_id": deployment_id}
-        finally:
-            await client.close()
-            if extract_path and os.path.exists(extract_path):
-                shutil.rmtree(extract_path, ignore_errors=True)
+        terminal.add_error(f"all tokens exhausted. last error: {last_error}")
+        return {"success": False, "error": f"All Railway tokens exhausted. Last error: {last_error}", "deployment_id": deployment_id}
 
     async def stop_deployment(self, deployment_id: str) -> bool:
         dep = await database.get_deployment(deployment_id)
