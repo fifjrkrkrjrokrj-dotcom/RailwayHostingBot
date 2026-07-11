@@ -32,6 +32,12 @@ class OwnerLogService:
             "broadcast_used": "📢 BROADCAST SENT",
             "token_warning": "⚠ LOW ACTIVE TOKENS",
             "abuse_detected": "⚠ ABUSE DETECTED",
+            # Token cleanup events
+            "orphan_cleanup": "🧹 ORPHAN PROJECT DELETED",
+            "token_restricted": "🚫 TOKEN RESTRICTED/INVALID",
+            "token_exhausted": "💸 TOKEN CREDIT EXHAUSTED",
+            "dead_projects_cleaned": "🗑 DEAD PROJECTS CLEANED",
+            "token_cleanup_summary": "📊 TOKEN CLEANUP SUMMARY",
         }
         header = headers.get(log_type, f"📋 {log_type.upper()}")
         lines = [f"━━━━━━━━━━━━━━━━━━", header, "━━━━━━━━━━━━━━━━━━"]

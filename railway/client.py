@@ -507,3 +507,85 @@ class RailwayClient:
         except Exception as e:
             logger.error(f"Failed to delete project: {e}")
             return False
+
+    async def list_all_projects(self) -> list:
+        """List all projects under this token's account."""
+        query = """
+        query {
+            me {
+                workspaces {
+                    projects {
+                        edges {
+                            node {
+                                id
+                                name
+                                createdAt
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        try:
+            result = await self._query(query)
+            projects = []
+            workspaces = result.get("me", {}).get("workspaces", [])
+            for ws in workspaces:
+                for edge in ws.get("projects", {}).get("edges", []):
+                    node = edge.get("node", {})
+                    if node.get("id"):
+                        projects.append(node)
+            return projects
+        except Exception as e:
+            logger.error(f"Failed to list all projects: {e}")
+            return []
+
+    async def get_project_services_status(self, project_id: str) -> list:
+        """Get all services and their latest deployment status for a project."""
+        query = """
+        query GetProjectServices($id: String!) {
+            project(id: $id) {
+                services {
+                    edges {
+                        node {
+                            id
+                            name
+                            deployments(last: 1) {
+                                edges {
+                                    node {
+                                        id
+                                        status
+                                        createdAt
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        variables = {"id": project_id}
+        try:
+            result = await self._query(query, variables)
+            services = []
+            for edge in result.get("project", {}).get("services", {}).get("edges", []):
+                node = edge.get("node", {})
+                dep_edges = node.get("deployments", {}).get("edges", [])
+                latest_status = None
+                latest_dep_id = None
+                if dep_edges:
+                    latest = dep_edges[-1].get("node", {})
+                    latest_status = latest.get("status")
+                    latest_dep_id = latest.get("id")
+                services.append({
+                    "service_id": node.get("id"),
+                    "service_name": node.get("name"),
+                    "latest_status": latest_status,
+                    "latest_dep_id": latest_dep_id,
+                })
+            return services
+        except Exception as e:
+            logger.error(f"Failed to get project services status for {project_id}: {e}")
+            return []
