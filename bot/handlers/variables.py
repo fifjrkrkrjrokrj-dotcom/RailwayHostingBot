@@ -85,7 +85,7 @@ async def handle_single_variable(client: Client, message: Message):
 
     # Only apply vars if user is in "edit variable" state
     user = await database.get_user(user_id)
-    user_state = user.get("current_state") if user else ""
+    user_state = (user.get("current_state") or "") if user else ""
     if not user_state.startswith("var_"):
         await message.reply_text(
             "<b>⚠ You have an active bot running.</b>\n\n"

@@ -74,7 +74,11 @@ class Database:
             dep = await self.get_deployment(user["active_management_id"])
             if dep:
                 return dep
-        return await self.db.deployments.find_one({"user_id": user_id, "status": {"$in": ["running", "deploying", "starting"]}})
+        cursor = self.db.deployments.find(
+            {"user_id": user_id, "status": {"$in": ["running", "deploying", "starting"]}}
+        ).sort("created_at", -1).limit(1)
+        deps = await cursor.to_list(length=1)
+        return deps[0] if deps else None
 
     async def get_all_user_deployments(self, user_id: int):
         return await self.db.deployments.find({"user_id": user_id}).to_list(None)

@@ -47,6 +47,17 @@ async def handle_github_url(client: Client, message: Message):
         return
 
     url = message.text.strip()
+
+    # Check for existing active deployment
+    existing_active = await database.get_user_deployment(user_id)
+    if existing_active:
+        await message.reply_text(
+            "<b>⚠ You already have an active deployment!</b>\n\n"
+            "Please stop or delete your current bot before deploying a new one.",
+            reply_markup=my_bot_keyboard(True, existing_active["deployment_id"])
+        )
+        return
+
     from bot.deployment.engine import DEPLOY_CACHE
     # Check for existing pending deployment
     existing_pending = [did for did, d in DEPLOY_CACHE.items() if d.get("user_id") == user_id]
@@ -122,6 +133,16 @@ async def handle_zip_upload(client: Client, message: Message):
     user_id = message.from_user.id
     user = await database.get_user(user_id)
     if not user:
+        return
+
+    # Check for existing active deployment
+    existing_active = await database.get_user_deployment(user_id)
+    if existing_active:
+        await message.reply_text(
+            "<b>⚠ You already have an active deployment!</b>\n\n"
+            "Please stop or delete your current bot before deploying a new one.",
+            reply_markup=my_bot_keyboard(True, existing_active["deployment_id"])
+        )
         return
 
     from bot.deployment.engine import DEPLOY_CACHE

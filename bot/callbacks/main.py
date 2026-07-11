@@ -23,13 +23,17 @@ from github.client import github_client
 
 async def get_deployment_from_callback(query, user_id: int):
     data = query.data
+    has_uuid = False
     if len(data) >= 36:
         potential_uuid = data[-36:]
         if potential_uuid.count("-") == 4:
+            has_uuid = True
             dep = await database.get_deployment(potential_uuid)
             if dep:
                 return dep
-    return await database.get_user_deployment(user_id)
+    if not has_uuid:
+        return await database.get_user_deployment(user_id)
+    return None
 
 
 @Client.on_callback_query()
@@ -1735,6 +1739,7 @@ async def track_background_deployment(client: Client, message, user_id: int, con
                 if status in ("SUCCESS", "RUNNING", "CRASHED", "FAILED"):
                     if status in ("SUCCESS", "RUNNING"):
                         await database.update_deployment(deployment_id, {"status": "running", "url": dep_url})
+                        await database.update_user(user_id, {"active_management_id": deployment_id})
                         await owner_log.send_user_notification(
                             user_id,
                             f"🎉 <b>Bot Deployment Successful!</b>\n\n"
