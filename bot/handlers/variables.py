@@ -63,6 +63,37 @@ async def handle_single_variable(client: Client, message: Message):
                 await r_client.close()
             return
 
+    # Check if user is in "edit variable" state for a specific deployment
+    user = await database.get_user(user_id)
+    user_state = (user.get("current_state") or "") if user else ""
+    if user_state.startswith("var_edit_"):
+        target_dep_id = user_state[9:]
+        dep = await database.get_deployment(target_dep_id)
+        if dep:
+            variables = dep.get("variables", {})
+            variables.update(parsed_vars)
+            await database.update_deployment(target_dep_id, {"variables": variables})
+
+            status_msg = await message.reply_text("<b>⚙ Syncing variables to Railway...</b>")
+            r_client = RailwayClient(dep["railway_token"])
+            try:
+                for k, v in parsed_vars.items():
+                    await r_client.set_environment_variable(dep["project_id"], dep["environment_id"], k, v, service_id=dep["service_id"])
+                new_dep_id = await r_client.create_deployment(dep["service_id"], dep["environment_id"])
+                if new_dep_id:
+                    await database.update_deployment(target_dep_id, {"railway_deployment_id": new_dep_id})
+                var_str = "\n".join([f"<b>{k}</b> = <code>{v[:20]}...</code>" for k, v in list(parsed_vars.items())[:5]])
+                if len(parsed_vars) > 5:
+                    var_str += f"\n...and {len(parsed_vars) - 5} more"
+                await status_msg.edit_text(
+                    f"<b>✅ {len(parsed_vars)} Variables synced to Railway and bot is restarting:</b>\n\n{var_str}"
+                )
+            except Exception as e:
+                await status_msg.edit_text(f"<b>❌ Failed to sync variables to Railway: {str(e)}</b>")
+            finally:
+                await r_client.close()
+            return
+
     from bot.deployment.engine import DEPLOY_CACHE
     # ALWAYS check pending cache first — variables go only to pending deploy
     user_entries = [(did, d) for did, d in DEPLOY_CACHE.items() if d.get("user_id") == user_id]
@@ -83,9 +114,6 @@ async def handle_single_variable(client: Client, message: Message):
         await message.reply_text("<b>❌ No active deployment or pending deployment found</b>")
         return
 
-    # Only apply vars if user is in "edit variable" state
-    user = await database.get_user(user_id)
-    user_state = (user.get("current_state") or "") if user else ""
     if not user_state.startswith("var_"):
         await message.reply_text(
             "<b>⚠ You have an active bot running.</b>\n\n"

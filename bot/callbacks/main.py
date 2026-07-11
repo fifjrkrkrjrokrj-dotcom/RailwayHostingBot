@@ -42,7 +42,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
     data = query.data
     msg = query.message
 
-    if not data.startswith("rename_bot"):
+    if not (data.startswith("rename_bot") or data.startswith("var_")):
         await database.update_user(user_id, {"current_state": None})
 
     handlers = {
@@ -573,6 +573,8 @@ async def cb_edit_vars(client: Client, query: CallbackQuery):
     if not dep:
         await query.answer("No active deployment")
         return
+    # Track which deployment the user is editing variables for
+    await database.update_user(user_id, {"current_state": f"var_edit_{dep['deployment_id']}"})
     await query.message.edit_text(
         "<blockquote><b>🔧 ᴠᴀʀɪᴀʙʟᴇ ᴍᴀɴᴀɢᴇʀ</b></blockquote>\n\n"
         "<b>ᴍᴀɴᴀɢᴇ ʏᴏᴜʀ ʙᴏᴛ's ᴇɴᴠɪʀᴏɴᴍᴇɴᴛ ᴠᴀʀɪᴀʙʟᴇs.</b>",
