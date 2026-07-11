@@ -13,7 +13,7 @@ from bot.keyboards.main import (
     support_keyboard, token_stats_keyboard, region_selection_keyboard,
     domain_manager_keyboard, domain_delete_keyboard,
 )
-from telegram import InlineKeyboardMarkup
+from pyrogram.types import InlineKeyboardMarkup
 from bot.deployment.engine import deployment_engine
 from bot.utils.formatters import format_uptime, format_variables_for_display
 from railway.token_manager import token_manager
@@ -138,7 +138,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         except Exception:
             pass
         from bot.services.log_service import owner_log
-        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         err_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🏡 Main Menu", callback_data="main_menu")]])
         try:
             await client.send_message(

@@ -1,4 +1,5 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
 
 class Styles:
     PRIMARY = "primary"
@@ -8,10 +9,10 @@ class Styles:
     SECONDARY = "secondary"
 
 
-def btn(text: str, callback: str = None, url: str = None, style: str = Styles.PRIMARY) -> InlineKeyboardButton:
+def btn(text: str, callback: str = None, url: str = None, style: str = None) -> InlineKeyboardButton:
     if url:
         return InlineKeyboardButton(text, url=url)
-    return InlineKeyboardButton(text, callback_data=callback, style=style)
+    return InlineKeyboardButton(text, callback_data=callback)
 
 
 def build_menu(buttons: list, row_width: int = 2) -> InlineKeyboardMarkup:

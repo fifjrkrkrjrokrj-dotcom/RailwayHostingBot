@@ -166,7 +166,7 @@ async def _patched_send_message(self, chat_id, text, *args, **kwargs):
     reply_markup = kwargs.get("reply_markup")
 
     if not no_buttons and reply_markup is None and isinstance(chat_id, int) and chat_id > 0:
-        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🏡 Main Menu", callback_data="main_menu")]])
         kwargs["reply_markup"] = reply_markup
 
@@ -288,7 +288,7 @@ async def _patched_edit_text(self, text, reply_markup=None, **kwargs):
     no_buttons = kwargs.pop("no_buttons", False)
 
     if not no_buttons and reply_markup is None and self.chat.id > 0:
-        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🏡 Main Menu", callback_data="main_menu")]])
 
     if reply_markup is not None and hasattr(reply_markup, "to_dict") and "telegram" in type(reply_markup).__module__:
@@ -351,7 +351,7 @@ async def _patched_edit_message_text(self, text, reply_markup=None, **kwargs):
 
     chat_id = self.message.chat.id if self.message else 0
     if not no_buttons and reply_markup is None and chat_id > 0:
-        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🏡 Main Menu", callback_data="main_menu")]])
 
     if reply_markup is not None and hasattr(reply_markup, "to_dict") and "telegram" in type(reply_markup).__module__:
