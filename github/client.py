@@ -119,18 +119,11 @@ class GitHubClient:
             return None
 
     async def _resolve_branch(self, owner: str, repo: str, branch: Optional[str], info: dict) -> str:
-        """
-        Resolve the correct branch name.
-        - If explicitly given in URL → use it directly.
-        - Otherwise → use repo's default_branch from API info.
-        - Fallback: try 'main', then 'master'.
-        """
         if branch:
             return branch
-        default = info.get("default_branch")
+        default = info.get("default_branch") if isinstance(info, dict) else None
         if default:
             return default
-        # Final fallback
         return "main"
 
     async def scan_repository(self, owner: str, repo: str, branch: Optional[str] = None) -> dict:
@@ -160,16 +153,18 @@ class GitHubClient:
         try:
             zip_data = await self.download_repo_zip(owner, repo, resolved_branch)
 
-            # If resolved branch failed and we auto-detected, try the other common branch
             if not zip_data and not branch:
-                fallback = "master" if resolved_branch == "main" else "main"
-                logger.warning(f"Branch '{resolved_branch}' download failed, trying '{fallback}'")
-                zip_data = await self.download_repo_zip(owner, repo, fallback)
-                if zip_data:
-                    resolved_branch = fallback
+                for fallback in ("master", "main", "develop", "HEAD"):
+                    if fallback == resolved_branch:
+                        continue
+                    logger.warning(f"Branch '{resolved_branch}' download failed, trying '{fallback}'")
+                    zip_data = await self.download_repo_zip(owner, repo, fallback)
+                    if zip_data:
+                        resolved_branch = fallback
+                        break
 
             if not zip_data:
-                return {"success": False, "error": f"Failed to download repository (branch: {resolved_branch}). The repo may be empty or the branch may not exist."}
+                return {"success": False, "error": f"Failed to download repository (attempted branch: {resolved_branch}). The repo may be empty or the branch may not exist."}
 
             return await self._scan_zip_data(zip_data, owner, repo, resolved_branch)
         except asyncio.TimeoutError:
@@ -183,6 +178,25 @@ class GitHubClient:
         files = []
         contents = {}
 
+        BINARY_EXTENSIONS = frozenset({
+            '.pyc', '.pyo', '.so', '.dll', '.dylib', '.exe', '.bin', '.dat',
+            '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.svg',
+            '.mp3', '.mp4', '.wav', '.ogg', '.flac', '.avi', '.mkv', '.mov',
+            '.zip', '.tar', '.gz', '.bz2', '.rar', '.7z',
+            '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+            '.ttf', '.otf', '.woff', '.woff2', '.eot',
+            '.db', '.sqlite', '.sqlite3',
+            '.whl', '.egg', '.deb', '.rpm',
+        })
+        TEXT_EXTENSIONS = frozenset({
+            '.py', '.txt', '.env', '.yml', '.yaml', '.json', '.cfg', '.ini',
+            '.sh', '.toml', '.md', '.rst', '.conf', '.csv', '.xml', '.html',
+            '.css', '.js', '.ts', '.jsx', '.tsx', '.vue', '.cfg',
+            '.gitignore', '.dockerignore', '.editorconfig',
+            '.requirements', '.lock',
+        })
+        MAX_TEXT_FILE_SIZE = 512 * 1024  # 512KB
+
         try:
             with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
                 for info in zf.infolist():
@@ -192,6 +206,14 @@ class GitHubClient:
                     if not path:
                         continue
                     files.append(path)
+                    ext = os.path.splitext(path)[1].lower()
+                    if ext in BINARY_EXTENSIONS:
+                        continue
+                    if ext not in TEXT_EXTENSIONS:
+                        continue
+                    if info.file_size > MAX_TEXT_FILE_SIZE:
+                        contents[path] = ""
+                        continue
                     try:
                         contents[path] = zf.read(info).decode("utf-8", errors="ignore")
                     except Exception:

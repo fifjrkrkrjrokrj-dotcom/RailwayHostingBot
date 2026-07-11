@@ -75,10 +75,11 @@ async def handle_github_url(client: Client, message: Message):
         await status_msg.edit_text(f"<b>❌ {scan.get('error', 'Scan failed')}</b>")
         return
 
+    branch_display = parsed['branch'] or scan.get('branch', 'main')
     preview_text = (
         f"<blockquote><b>📦 ʀᴇᴘᴏsɪᴛᴏʀʏ sᴄᴀɴ ʀᴇsᴜʟᴛ</b></blockquote>\n\n"
         f"<b>🐙 Repo:</b> {parsed['owner']}/{parsed['repo']}\n"
-        f"<b>🌿 Branch:</b> {parsed['branch']}\n"
+        f"<b>🌿 Branch:</b> {branch_display}\n"
         f"<b>⚙ Framework:</b> {scan['framework']}\n"
         f"<b>🚀 Startup:</b> {scan['startup_file']}\n"
         f"<b>📄 requirements.txt:</b> {'✅' if scan['has_requirements'] else '❌'}\n"
@@ -94,7 +95,8 @@ async def handle_github_url(client: Client, message: Message):
         "url": url,
         "owner": parsed["owner"],
         "repo": parsed["repo"],
-        "branch": parsed["branch"],
+        "branch": parsed["branch"] or scan.get("branch", "main"),
+        "scan_result": scan,
         "variables": {}
     }
 

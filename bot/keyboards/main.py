@@ -36,8 +36,7 @@ def start_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
 
 def deploy_keyboard() -> InlineKeyboardMarkup:
     buttons = [
-        [btn("🐙 Deploy via GitHub", "deploy_github"), btn("📦 Deploy via ZIP", "deploy_zip")],
-        [btn("⚙ Configure Variables", "deploy_vars"), btn("🔧 Configure Runtime", "deploy_runtime")],
+        [btn("🐙 Deploy via GitHub", "deploy_github")],
         [btn("◀ Back", "main_menu")],
     ]
     return InlineKeyboardMarkup(buttons)
@@ -87,6 +86,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [btn("💳 Payment Requests", "admin_payments"), btn("➕ Add Plan", "admin_add_plan")],
         [btn("⚡ Force Redeploy", "admin_force_redeploy"), btn("📋 System Logs", "admin_system_logs")],
         [btn("💾 Database Status", "admin_db_status"), btn("🔧 Maintenance", "admin_maintenance")],
+        [btn("🩺 API Health Check", "admin_api_health")],
         [btn("◀ Back", "main_menu")],
     ]
     return InlineKeyboardMarkup(buttons)

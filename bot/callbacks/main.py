@@ -78,6 +78,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         "admin_system_logs": cb_admin_system_logs,
         "admin_db_status": cb_admin_db_status,
         "admin_maintenance": cb_admin_maintenance,
+        "admin_api_health": cb_admin_api_health,
         "var_add": cb_var_add,
         "var_edit": cb_var_edit,
         "var_delete": cb_var_delete,
@@ -164,9 +165,10 @@ async def cb_deploy_menu(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     await query.message.edit_text(
         "<blockquote><b>🚀 ᴅᴇᴘʟᴏʏ ᴍᴇɴᴜ</b></blockquote>\n\n"
-        "<b>ᴄʜᴏᴏsᴇ ʏᴏᴜʀ ᴅᴇᴘʟᴏʏᴍᴇɴᴛ ᴍᴇᴛʜᴏᴅ:</b>\n\n"
-        "<b>🐙 ɢɪᴛʜᴜʙ</b> — sᴇɴᴅ ᴀ ᴘᴜʙʟɪᴄ ɢɪᴛʜᴜʀ ʀᴇᴘᴏ ʟɪɴᴋ\n"
-        "<b>📦 ᴢɪᴘ</b> — ᴜᴘʟᴏᴀᴅ ᴀ ᴢɪᴘ ғɪʟᴇ",
+        "<b>Send your public GitHub repository link to deploy your Python Telegram bot.</b>\n\n"
+        "<b>📌 Format:</b>\n"
+        "<code>https://github.com/username/repository</code>\n\n"
+        "<b>🐙 Only public GitHub repos are supported.</b>",
         reply_markup=deploy_keyboard(),
     )
     await query.answer()
@@ -855,7 +857,11 @@ async def cb_admin_maintenance(client: Client, query: CallbackQuery):
     await query.answer()
 
 
-async def cb_var_add(client: Client, query: CallbackQuery):
+async def cb_admin_api_health(client: Client, query: CallbackQuery):
+    if query.from_user.id not in settings.OWNER_IDS:
+        await query.answer("Unauthorized")
+        return
+    await query.answer("Checking APIs... please
     user_id = query.from_user.id
     dep = await get_deployment_from_callback(query, user_id)
     if not dep:
@@ -1159,7 +1165,12 @@ async def cb_cancel(client: Client, query: CallbackQuery):
     action = query.data[7:]
     user_id = query.from_user.id
     action_type = action.split("_")[0]
-    if action_type in ("stop", "delete", "restart", "var_reset", "force_redeploy"):
+    if action.startswith("deploy_"):
+        from bot.deployment.engine import DEPLOY_CACHE
+        deploy_id = action[7:]
+        DEPLOY_CACHE.pop(deploy_id, None)
+        await query.message.edit_text("<b>❌ Deployment cancelled</b>", reply_markup=deploy_keyboard())
+    elif action_type in ("stop", "delete", "restart", "var_reset", "force_redeploy"):
         dep = await get_deployment_from_callback(query, user_id)
         await query.message.edit_text("<b>❌ Action cancelled</b>", reply_markup=my_bot_keyboard(bool(dep), dep["deployment_id"] if dep else None))
     elif action == "back_deploy":
@@ -1395,7 +1406,8 @@ async def track_background_deployment(client: Client, message, user_id: int, con
         await message.edit_text("<b>🚀 Starting project creation and setup...</b>", reply_markup=building_kb)
         
         if context["type"] == "github":
-            result = await deployment_engine.deploy_from_github(user_id, context["url"], dep_vars)
+            scan_result = context.get("scan_result")
+            result = await deployment_engine.deploy_from_github(user_id, context["url"], dep_vars, scan_result=scan_result)
         else:
             result = await deployment_engine.deploy_from_zip(user_id, context["zip_data"], dep_vars)
             

@@ -75,7 +75,7 @@ class DeploymentEngine:
             self._terminals[deployment_id] = TerminalBuffer(deployment_id)
         return self._terminals[deployment_id]
 
-    async def deploy_from_github(self, user_id: int, repo_url: str, variables: dict = None) -> dict:
+    async def deploy_from_github(self, user_id: int, repo_url: str, variables: dict = None, scan_result: dict = None) -> dict:
         deployment_id = str(uuid.uuid4())
         extract_path = None
         terminal = self.get_terminal(deployment_id)
@@ -86,19 +86,22 @@ class DeploymentEngine:
             terminal.add_error("invalid github url")
             return {"success": False, "error": "Invalid GitHub URL", "deployment_id": deployment_id}
 
+        branch_display = parsed['branch'] or "default"
         terminal.add_line(f"repository: {parsed['owner']}/{parsed['repo']}")
-        terminal.add_line(f"branch: {parsed['branch']}")
+        terminal.add_line(f"branch: {branch_display}")
 
-        terminal.add_line("cloning repository...")
-        try:
-            scan_result = await asyncio.wait_for(
-                github_client.scan_repository(parsed["owner"], parsed["repo"], parsed["branch"]),
-                timeout=90,
-            )
-        except asyncio.TimeoutError:
-            terminal.add_error("scan timed out — repository may be too large or GitHub is slow")
-            return {"success": False, "error": "Repository scan timed out. Please try again.", "deployment_id": deployment_id}
-
+        if scan_result is None:
+            terminal.add_line("cloning repository...")
+            try:
+                scan_result = await asyncio.wait_for(
+                    github_client.scan_repository(parsed["owner"], parsed["repo"], parsed["branch"]),
+                    timeout=90,
+                )
+            except asyncio.TimeoutError:
+                terminal.add_error("scan timed out — repository may be too large or GitHub is slow")
+                return {"success": False, "error": "Repository scan timed out. Please try again.", "deployment_id": deployment_id}
+        else:
+            terminal.add_line("using pre-scanned repository data...")
 
         if not scan_result.get("success"):
             terminal.add_error(scan_result.get("error", "scan failed"))
