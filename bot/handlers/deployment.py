@@ -18,16 +18,6 @@ async def deploy_handler(client: Client, message: Message):
     if not user:
         await database.create_user(user_id, message.from_user.username or "", message.from_user.first_name or "")
 
-    existing = await database.get_user_deployment(user_id)
-    if existing:
-        await message.reply_text(
-            "<b>⚠ You already have an active deployment!</b>\n\n"
-            "<b>You can only have one deployment at a time.</b>\n"
-            "<b>Please stop or delete your current bot first.</b>",
-            reply_markup=my_bot_keyboard(True),
-        )
-        return
-
     await message.reply_text(
         "<blockquote><b>🚀 ᴅᴇᴘʟᴏʏ ᴍᴇɴᴜ</b></blockquote>\n\n"
         "<b>ᴄʜᴏᴏsᴇ ʏᴏᴜʀ ᴅᴇᴘʟᴏʏᴍᴇɴᴛ ᴍᴇᴛʜᴏᴅ:</b>\n\n"
@@ -47,16 +37,6 @@ async def handle_github_url(client: Client, message: Message):
         return
 
     url = message.text.strip()
-
-    # Check for existing active deployment
-    existing_active = await database.get_user_deployment(user_id)
-    if existing_active:
-        await message.reply_text(
-            "<b>⚠ You already have an active deployment!</b>\n\n"
-            "Please stop or delete your current bot before deploying a new one.",
-            reply_markup=my_bot_keyboard(True, existing_active["deployment_id"])
-        )
-        return
 
     from bot.deployment.engine import DEPLOY_CACHE
     # Check for existing pending deployment
@@ -133,16 +113,6 @@ async def handle_zip_upload(client: Client, message: Message):
     user_id = message.from_user.id
     user = await database.get_user(user_id)
     if not user:
-        return
-
-    # Check for existing active deployment
-    existing_active = await database.get_user_deployment(user_id)
-    if existing_active:
-        await message.reply_text(
-            "<b>⚠ You already have an active deployment!</b>\n\n"
-            "Please stop or delete your current bot before deploying a new one.",
-            reply_markup=my_bot_keyboard(True, existing_active["deployment_id"])
-        )
         return
 
     from bot.deployment.engine import DEPLOY_CACHE
