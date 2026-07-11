@@ -3,7 +3,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from bot.config.settings import settings
 from bot.database.db import database
-from bot.keyboards.main import variable_keyboard
+from bot.keyboards.main import variable_keyboard, my_bot_keyboard
 from bot.utils.formatters import parse_env_content, format_variables_for_display
 from bot.utils.security import encrypt_value, decrypt_value
 from railway.client import RailwayClient
@@ -63,15 +63,10 @@ async def handle_single_variable(client: Client, message: Message):
                 await r_client.close()
             return
 
-    dep = await database.get_user_deployment(user_id)
-    if not dep:
-        from bot.deployment.engine import DEPLOY_CACHE
-        # Find the LATEST pending cache entry for this user
-        user_entries = [(did, d) for did, d in DEPLOY_CACHE.items() if d.get("user_id") == user_id]
-        if not user_entries:
-            await message.reply_text("<b>❌ No active deployment found</b>")
-            return
-        # Sort by creation order (dict insertion order = FIFO), take latest
+    from bot.deployment.engine import DEPLOY_CACHE
+    # ALWAYS check pending cache first — variables go only to pending deploy
+    user_entries = [(did, d) for did, d in DEPLOY_CACHE.items() if d.get("user_id") == user_id]
+    if user_entries:
         target_id, target_data = user_entries[-1]
         target_data.setdefault("variables", {}).update(parsed_vars)
         var_str = "\n".join([f"<b>{k}</b> = <code>{v[:20]}...</code>" for k, v in list(parsed_vars.items())[:5]])
@@ -79,6 +74,23 @@ async def handle_single_variable(client: Client, message: Message):
             var_str += f"\n...and {len(parsed_vars) - 5} more"
         await message.reply_text(
             f"<b>✅ {len(parsed_vars)} Variables added to pending deployment:</b>\n\n{var_str}"
+        )
+        return
+
+    # No pending cache — check for an existing active deployment
+    dep = await database.get_user_deployment(user_id)
+    if not dep:
+        await message.reply_text("<b>❌ No active deployment or pending deployment found</b>")
+        return
+
+    # Only apply vars if user is in "edit variable" state
+    user = await database.get_user(user_id)
+    user_state = user.get("current_state") if user else ""
+    if not user_state.startswith("var_"):
+        await message.reply_text(
+            "<b>⚠ You have an active bot running.</b>\n\n"
+            "Use the <b>🔧 Setup Variables</b> button in your bot dashboard to edit variables.",
+            reply_markup=my_bot_keyboard(True, dep["deployment_id"])
         )
         return
 

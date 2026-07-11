@@ -705,6 +705,8 @@ async def cb_admin_token_stats(client: Client, query: CallbackQuery):
         f"<b>📦 Total Deployments:</b> {stats['total_deployments']}\n\n"
     )
     for t in stats.get("tokens", []):
+        if not t.get("is_active"):
+            continue
         text += (
             f"<b>Token:</b> <code>{t['token'][:12]}...</code>\n"
             f"  <b>Active:</b> {'✅' if t.get('is_active') else '❌'}\n"

@@ -117,7 +117,10 @@ class Database:
 
     async def get_available_token(self):
         return await self.db.railway_tokens.find_one_and_update(
-            {"is_active": True, "is_available": True, "is_restricted": {"$ne": True}, "current_deployments": {"$lt": 1}},
+            {
+                "is_active": True, "is_available": True, "is_restricted": {"$ne": True},
+                "$expr": {"$lt": ["$current_deployments", "$max_deployments"]},
+            },
             {"$inc": {"current_deployments": 1}},
             sort=[("priority", -1), ("credits", -1)],
         )

@@ -55,7 +55,7 @@ def my_bot_keyboard(has_deployment: bool = False, deployment_id: str = None) -> 
         [btn("📊 Runtime Stats", f"runtime_stats{suffix}"), btn("🔧 Setup Variables", f"edit_vars{suffix}")],
         [btn("🌐 Change Region", f"change_region{suffix}"), btn("🌍 Domain Manager", f"domain_manager{suffix}")],
         [btn("🔄 Restart Bot", f"restart_bot{suffix}"), btn("⏹ Stop Bot", f"stop_bot{suffix}")],
-        [btn("🗑 Delete Bot", f"delete_bot{suffix}"), btn("🌍 View URL", f"view_url{suffix}")],
+        [btn("🗑 Delete Dashboard", f"delete_bot{suffix}"), btn("🌍 View URL", f"view_url{suffix}")],
         [btn("📥 Download Logs", f"download_logs{suffix}"), btn("🔄 Check Repo Update", f"redeploy{suffix}")],
         [btn("🔁 Redeploy with Vars", f"redeploy_vars{suffix}")],
         [btn("✏ Rename Dashboard", f"rename_bot{suffix}")],
