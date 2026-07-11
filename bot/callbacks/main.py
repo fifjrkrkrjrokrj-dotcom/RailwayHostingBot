@@ -18,6 +18,7 @@ from bot.deployment.engine import deployment_engine
 from bot.utils.formatters import format_uptime, format_variables_for_display
 from railway.token_manager import token_manager
 from railway.client import RailwayClient
+from github.client import github_client
 
 
 async def get_deployment_from_callback(query, user_id: int):
@@ -79,6 +80,8 @@ async def callback_handler(client: Client, query: CallbackQuery):
         "admin_db_status": cb_admin_db_status,
         "admin_maintenance": cb_admin_maintenance,
         "admin_api_health": cb_admin_api_health,
+        "admin_restrict_token": cb_admin_restrict_token,
+        "admin_cleanup_workshops": cb_admin_cleanup_workshops,
         "var_add": cb_var_add,
         "var_edit": cb_var_edit,
         "var_delete": cb_var_delete,
@@ -122,6 +125,8 @@ async def callback_handler(client: Client, query: CallbackQuery):
             await cb_set_region(client, query)
         elif data.startswith("setregionactive_"):
             await cb_set_region_active(client, query)
+        elif data.startswith("toggle_restrict_"):
+            await cb_toggle_restrict(client, query)
         elif data.startswith("confirm_delete_dom_"):
             await cb_confirm_delete_dom(client, query)
         elif data.startswith("confirm_"):
@@ -861,7 +866,168 @@ async def cb_admin_api_health(client: Client, query: CallbackQuery):
     if query.from_user.id not in settings.OWNER_IDS:
         await query.answer("Unauthorized")
         return
-    await query.answer("Checking APIs... please
+    await query.answer("🩺 Running health checks...", show_alert=True)
+    await query.message.edit_text("<b>🔍 Checking all services...</b>")
+
+    results = []
+
+    # 1) MongoDB health
+    try:
+        await database.db.command("ping")
+        results.append(("✅", "MongoDB", "Connected"))
+    except Exception as e:
+        results.append(("❌", "MongoDB", str(e)))
+
+    # 2) Railway API health (try first available token)
+    tokens = await database.get_all_tokens()
+    if tokens:
+        tested = False
+        for tdoc in tokens[:3]:
+            if not tdoc.get("is_active"):
+                continue
+            r_client = RailwayClient(tdoc["token"])
+            try:
+                info = await r_client.get_account_info()
+                if info.get("me", {}).get("id"):
+                    results.append(("✅", "Railway API", f"Workspaces: {len(info.get('me',{}).get('workspaces',[]))}"))
+                    tested = True
+                    await r_client.close()
+                    break
+                await r_client.close()
+            except Exception as e:
+                await r_client.close()
+                continue
+        if not tested:
+            results.append(("⚠", "Railway API", "No valid token to test"))
+    else:
+        results.append(("⚠", "Railway API", "No tokens configured"))
+
+    # 3) GitHub API health
+    try:
+        test_ok = await github_client._test_connection()
+        results.append(("✅" if test_ok else "❌", "GitHub API", "Reachable" if test_ok else "Unreachable"))
+    except Exception as e:
+        results.append(("❌", "GitHub API", str(e)))
+
+    # 4) Bot uptime
+    try:
+        me = await client.get_me()
+        results.append(("✅", "Bot", f"@{me.username} (ID: {me.id})"))
+    except Exception as e:
+        results.append(("❌", "Bot", str(e)))
+
+    # 5) Deployment engine status
+    active_deps = await database.count_active_deployments()
+    total_deps = await database.count_total_deployments()
+    results.append(("ℹ", "Deployments", f"{active_deps} active / {total_deps} total"))
+
+    text = "<blockquote><b>🩺 API HEALTH CHECK</b></blockquote>\n\n"
+    for icon, name, status in results:
+        text += f"<b>{icon} {name}:</b> <code>{status}</code>\n"
+    text += f"\n<b>Last check:</b> <code>{__import__('datetime').datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</code>"
+
+    await query.message.edit_text(text, reply_markup=admin_keyboard())
+
+
+async def cb_admin_restrict_token(client: Client, query: CallbackQuery):
+    if query.from_user.id not in settings.OWNER_IDS:
+        await query.answer("Unauthorized")
+        return
+    tokens = await database.get_all_tokens()
+    if not tokens:
+        await query.message.edit_text("<b>No tokens configured.</b>", reply_markup=admin_keyboard())
+        await query.answer()
+        return
+    from bot.keyboards.main import btn
+    from pyrogram.types import InlineKeyboardMarkup
+    buttons = []
+    for t in tokens:
+        prefix = t["token"][:12]
+        restricted = t.get("is_restricted", False)
+        label = f"{'🚫' if restricted else '✅'} {prefix}..."
+        buttons.append([btn(label, f"toggle_restrict_{t['token']}")])
+    buttons.append([btn("◀ Back", "admin_panel")])
+    await query.message.edit_text(
+        "<blockquote><b>🚫 ᴛᴏᴋᴇɴ ʀᴇsᴛʀɪᴄᴛɪᴏɴ</b></blockquote>\n\n"
+        "<b>Click a token to toggle restriction.</b>\n"
+        "<b>🚫 = Restricted (not used for new deployments)</b>\n"
+        "<b>✅ = Active (available for deployment)</b>",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+    await query.answer()
+
+
+async def cb_admin_cleanup_workshops(client: Client, query: CallbackQuery):
+    if query.from_user.id not in settings.OWNER_IDS:
+        await query.answer("Unauthorized")
+        return
+    await query.answer("🧹 Running workshop cleanup...", show_alert=True)
+    await query.message.edit_text("<b>🧹 Cleaning up non-running workshops...</b>")
+
+    cleaned = 0
+    errors = 0
+    tokens = await database.get_all_tokens()
+    for tdoc in tokens:
+        if not tdoc.get("is_active"):
+            continue
+        if tdoc.get("is_restricted"):
+            continue
+        r_client = RailwayClient(tdoc["token"])
+        try:
+            projects = await r_client.list_all_projects()
+            for proj in projects:
+                pid = proj["id"]
+                services = await r_client.get_project_services_status(pid)
+                all_dead = True
+                for svc in services:
+                    dep_node = svc.get("deployments", {}).get("edges", [{}])[0].get("node", {})
+                    status = (dep_node.get("status") or "").upper()
+                    if status in ("SUCCESS", "RUNNING", "BUILDING", "QUEUED", "DEPLOYING"):
+                        all_dead = False
+                        break
+                if all_dead and services:
+                    # Check if this is one of our deployments
+                    db_dep = await database.db.deployments.find_one({"project_id": pid})
+                    if not db_dep:
+                        # Orphan project - safe to delete
+                        try:
+                            await r_client.delete_project(pid)
+                            cleaned += 1
+                        except Exception:
+                            errors += 1
+        except Exception:
+            errors += 1
+        finally:
+            await r_client.close()
+
+    text = (
+        f"<blockquote><b>🧹 ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇ</b></blockquote>\n\n"
+        f"<b>🗑 Projects deleted:</b> {cleaned}\n"
+        f"<b>❌ Errors:</b> {errors}\n"
+        f"<b>🔍 Tokens scanned:</b> {len(tokens)}"
+    )
+    await query.message.edit_text(text, reply_markup=admin_keyboard())
+
+
+async def cb_toggle_restrict(client: Client, query: CallbackQuery):
+    if query.from_user.id not in settings.OWNER_IDS:
+        await query.answer("Unauthorized")
+        return
+    token = query.data[16:]
+    tdoc = await database.get_railway_token(token)
+    if not tdoc:
+        await query.answer("Token not found", show_alert=True)
+        return
+    if tdoc.get("is_restricted"):
+        await database.unrestrict_token(token)
+        await query.answer("✅ Token unrestricted - now available for deployments", show_alert=True)
+    else:
+        await database.restrict_token(token)
+        await query.answer("🚫 Token restricted - will not be used for new deployments", show_alert=True)
+    await cb_admin_restrict_token(client, query)
+
+
+async def cb_var_add(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     dep = await get_deployment_from_callback(query, user_id)
     if not dep:

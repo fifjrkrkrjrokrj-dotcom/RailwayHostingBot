@@ -80,13 +80,13 @@ def variable_keyboard(deployment_id: str = None) -> InlineKeyboardMarkup:
 def admin_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [btn("🚂 Add Railway Token", "admin_add_token"), btn("🗑 Remove Token", "admin_remove_token")],
-        [btn("🎫 View Tokens & Stats", "admin_token_stats"), btn("📊 Queue Stats", "admin_queue_stats")],
+        [btn("🎫 View Tokens & Stats", "admin_token_stats"), btn("🚫 Restrict Token", "admin_restrict_token")],
         [btn("👥 User Stats", "admin_user_stats"), btn("📢 Broadcast", "admin_broadcast")],
         [btn("🔨 Ban User", "admin_ban"), btn("🔓 Unban User", "admin_unban")],
         [btn("💳 Payment Requests", "admin_payments"), btn("➕ Add Plan", "admin_add_plan")],
         [btn("⚡ Force Redeploy", "admin_force_redeploy"), btn("📋 System Logs", "admin_system_logs")],
         [btn("💾 Database Status", "admin_db_status"), btn("🔧 Maintenance", "admin_maintenance")],
-        [btn("🩺 API Health Check", "admin_api_health")],
+        [btn("🩺 API Health Check", "admin_api_health"), btn("🧹 Cleanup Workshops", "admin_cleanup_workshops")],
         [btn("◀ Back", "main_menu")],
     ]
     return InlineKeyboardMarkup(buttons)

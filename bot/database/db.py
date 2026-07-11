@@ -117,7 +117,7 @@ class Database:
 
     async def get_available_token(self):
         return await self.db.railway_tokens.find_one_and_update(
-            {"is_active": True, "is_available": True, "current_deployments": {"$lt": 1}},
+            {"is_active": True, "is_available": True, "is_restricted": {"$ne": True}, "current_deployments": {"$lt": 1}},
             {"$inc": {"current_deployments": 1}},
             sort=[("priority", -1), ("credits", -1)],
         )
@@ -142,6 +142,15 @@ class Database:
 
     async def delete_token(self, token: str):
         await self.db.railway_tokens.delete_one({"token": token})
+
+    async def restrict_token(self, token: str):
+        await self.db.railway_tokens.update_one({"token": token}, {"$set": {"is_restricted": True}})
+
+    async def unrestrict_token(self, token: str):
+        await self.db.railway_tokens.update_one({"token": token}, {"$unset": {"is_restricted": ""}})
+
+    async def get_restricted_tokens(self) -> list:
+        return await self.db.railway_tokens.find({"is_restricted": True}).to_list(None)
 
     # ---- Force Subscribe ----
     async def add_channel(self, channel_id: int, invite_link: str, name: str = ""):

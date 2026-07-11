@@ -412,6 +412,8 @@ from bot.config.settings import settings
 from bot.database.db import database
 from bot.workers.deployment_worker import deployment_worker
 from bot.services.log_service import owner_log
+from bot.services.cleanup_service import cleanup_service
+from bot.services.telegram_log_handler import telegram_log_handler
 import uvicorn
 
 logging.basicConfig(
@@ -444,8 +446,12 @@ async def start_bot():
 
 
     await owner_log.set_client(app)
+    telegram_log_handler.set_client(app)
+    logging.getLogger().addHandler(telegram_log_handler)
     await deployment_worker.start()
     logger.info("Deployment worker started")
+    await cleanup_service.start(interval=1800)
+    logger.info("Cleanup service started (interval=30min)")
 
     await app.start()
     logger.info(f"Bot started as @{settings.BOT_USERNAME}")
@@ -469,6 +475,7 @@ async def start_bot():
         await api_task
     except asyncio.CancelledError:
         pass
+    await cleanup_service.stop()
     await deployment_worker.stop()
     await app.stop()
     await database.close()

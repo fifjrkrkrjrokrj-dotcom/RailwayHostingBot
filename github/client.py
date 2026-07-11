@@ -273,5 +273,14 @@ class GitHubClient:
                 extracted.append(path)
         return extracted
 
+    async def _test_connection(self) -> bool:
+        """Test if GitHub API is reachable."""
+        try:
+            await self.ensure_session()
+            async with self.session.get("https://api.github.com/zen", timeout=_DEFAULT_TIMEOUT) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
 
 github_client = GitHubClient()
