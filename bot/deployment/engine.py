@@ -123,7 +123,11 @@ class DeploymentEngine:
         token_doc = None
         client = None
 
-        while True:
+        all_tokens = await database.get_all_tokens()
+        max_retries = max(len(all_tokens) * 2, 10)
+        retries = 0
+        while retries < max_retries:
+            retries += 1
             token_doc = await token_manager.get_available_token()
             if not token_doc:
                 terminal.add_error("no railway tokens available")
@@ -137,25 +141,15 @@ class DeploymentEngine:
                     raise Exception("API returned None")
                 break
             except Exception as e:
-                error_msg = str(e).lower()
-                if "limit exceeded" in error_msg or "provision limit" in error_msg:
-                    terminal.add_error(f"token {token_doc['token'][:5]}... exhausted. switching token...")
-                    try:
-                        from bot.services.log_service import owner_log
-                        await owner_log.send_user_notification(
-                            user_id,
-                            f"🔄 <b>Railway Token Switch</b>\n\n"
-                            f"The current Railway server token was exhausted or limit exceeded. "
-                            f"The bot is automatically switching to a new available token to deploy your project."
-                        )
-                    except Exception as notify_err:
-                        logger.error(f"Failed to send switch notification: {notify_err}")
-                    await database.disable_token(token_doc["token"])
-                    await token_manager.release_token(token_doc["token"])
-                else:
-                    terminal.add_error("failed to create project")
-                    await token_manager.release_token(token_doc["token"])
-                    return {"success": False, "error": f"Failed to create Railway project: {str(e)}", "deployment_id": deployment_id}
+                terminal.add_error(f"token {token_doc['token'][:5]}... failed ({str(e)[:60]}). switching...")
+                await database.disable_token(token_doc["token"])
+                await token_manager.release_token(token_doc["token"])
+                await client.close()
+                continue
+
+        if retries >= max_retries:
+            terminal.add_error("all tokens exhausted or invalid")
+            return {"success": False, "error": "All Railway tokens exhausted or invalid. Contact admin.", "deployment_id": deployment_id}
 
         try:
             project_id = project.get("projectCreate", {}).get("id") or str(uuid.uuid4())
@@ -299,7 +293,11 @@ class DeploymentEngine:
         token_doc = None
         client = None
 
-        while True:
+        all_tokens = await database.get_all_tokens()
+        max_retries = max(len(all_tokens) * 2, 10)
+        retries = 0
+        while retries < max_retries:
+            retries += 1
             token_doc = await token_manager.get_available_token()
             if not token_doc:
                 terminal.add_error("no railway tokens available")
@@ -313,25 +311,15 @@ class DeploymentEngine:
                     raise Exception("API returned None")
                 break
             except Exception as e:
-                error_msg = str(e).lower()
-                if "limit exceeded" in error_msg or "provision limit" in error_msg:
-                    terminal.add_error(f"token {token_doc['token'][:5]}... exhausted. switching token...")
-                    try:
-                        from bot.services.log_service import owner_log
-                        await owner_log.send_user_notification(
-                            user_id,
-                            f"🔄 <b>Railway Token Switch</b>\n\n"
-                            f"The current Railway server token was exhausted or limit exceeded. "
-                            f"The bot is automatically switching to a new available token to deploy your project."
-                        )
-                    except Exception as notify_err:
-                        logger.error(f"Failed to send switch notification: {notify_err}")
-                    await database.disable_token(token_doc["token"])
-                    await token_manager.release_token(token_doc["token"])
-                else:
-                    terminal.add_error("failed to create project")
-                    await token_manager.release_token(token_doc["token"])
-                    return {"success": False, "error": f"Failed to create Railway project: {str(e)}", "deployment_id": deployment_id}
+                terminal.add_error(f"token {token_doc['token'][:5]}... failed ({str(e)[:60]}). switching...")
+                await database.disable_token(token_doc["token"])
+                await token_manager.release_token(token_doc["token"])
+                await client.close()
+                continue
+
+        if retries >= max_retries:
+            terminal.add_error("all tokens exhausted or invalid")
+            return {"success": False, "error": "All Railway tokens exhausted or invalid. Contact admin.", "deployment_id": deployment_id}
 
         try:
             project_id = project.get("projectCreate", {}).get("id") or str(uuid.uuid4())

@@ -87,6 +87,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
         [btn("⚡ Force Redeploy", "admin_force_redeploy"), btn("📋 System Logs", "admin_system_logs")],
         [btn("💾 Database Status", "admin_db_status"), btn("🔧 Maintenance", "admin_maintenance")],
         [btn("🩺 API Health Check", "admin_api_health"), btn("🧹 Cleanup Workshops", "admin_cleanup_workshops")],
+        [btn("🔍 Validate Tokens", "admin_validate_tokens")],
         [btn("◀ Back", "main_menu")],
     ]
     return InlineKeyboardMarkup(buttons)

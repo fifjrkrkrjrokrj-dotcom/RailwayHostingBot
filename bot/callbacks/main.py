@@ -82,6 +82,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         "admin_api_health": cb_admin_api_health,
         "admin_restrict_token": cb_admin_restrict_token,
         "admin_cleanup_workshops": cb_admin_cleanup_workshops,
+        "admin_validate_tokens": cb_admin_validate_tokens,
         "var_add": cb_var_add,
         "var_edit": cb_var_edit,
         "var_delete": cb_var_delete,
@@ -1042,6 +1043,42 @@ async def cb_admin_cleanup_workshops(client: Client, query: CallbackQuery):
         f"<b>🗑 Projects deleted:</b> {cleaned}\n"
         f"<b>❌ Errors:</b> {errors}\n"
         f"<b>🔍 Tokens scanned:</b> {len(tokens)}"
+    )
+    await query.message.edit_text(text, reply_markup=admin_keyboard())
+
+
+async def cb_admin_validate_tokens(client: Client, query: CallbackQuery):
+    if query.from_user.id not in settings.OWNER_IDS:
+        await query.answer("Unauthorized")
+        return
+    await query.answer("🔍 Validating all tokens...", show_alert=True)
+    await query.message.edit_text("<b>🔍 Validating tokens and removing invalid ones...</b>")
+    tokens = await database.get_all_tokens()
+    removed = 0
+    kept = 0
+    for tdoc in tokens:
+        if not tdoc.get("is_active") and not tdoc.get("is_restricted"):
+            await database.delete_token(tdoc["token"])
+            removed += 1
+            continue
+        r_client = RailwayClient(tdoc["token"])
+        try:
+            info = await asyncio.wait_for(r_client.get_account_info(), timeout=15)
+            if not info.get("me", {}).get("id"):
+                await database.delete_token(tdoc["token"])
+                removed += 1
+            else:
+                kept += 1
+            await r_client.close()
+        except Exception:
+            await r_client.close()
+            await database.delete_token(tdoc["token"])
+            removed += 1
+    text = (
+        f"<blockquote><b>🔍 ᴛᴏᴋᴇɴ ᴠᴀʟɪᴅᴀᴛɪᴏɴ ᴄᴏᴍᴘʟᴇᴛᴇ</b></blockquote>\n\n"
+        f"<b>🗑 Removed invalid tokens:</b> {removed}\n"
+        f"<b>✅ Kept valid tokens:</b> {kept}\n"
+        f"<b>📊 Total before:</b> {len(tokens)}"
     )
     await query.message.edit_text(text, reply_markup=admin_keyboard())
 
