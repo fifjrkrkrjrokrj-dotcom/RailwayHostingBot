@@ -495,7 +495,7 @@ class RailwayClient:
     async def delete_project(self, project_id: str) -> bool:
         query = """
         mutation DeleteProject($id: String!) {
-            deleteProject(id: $id) {
+            projectDelete(id: $id) {
                 id
             }
         }

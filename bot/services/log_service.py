@@ -10,11 +10,13 @@ class OwnerLogService:
     async def set_client(self, client):
         self.client = client
 
-    async def send_log(self, log_type: str, **kwargs):
+    async def send_log(self, log_type: str, data: dict = None, **kwargs):
         if not self.client or not settings.LOG_GROUP_ID:
             return
+        if data is None:
+            data = kwargs
         try:
-            text = self._format_log(log_type, kwargs)
+            text = self._format_log(log_type, data)
             await self.client.send_message(settings.LOG_GROUP_ID, text)
         except Exception as e:
             logging.error(f"Failed to send log: {e}")
