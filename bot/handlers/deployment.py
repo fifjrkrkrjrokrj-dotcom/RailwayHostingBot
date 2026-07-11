@@ -40,6 +40,7 @@ async def deploy_handler(client: Client, message: Message):
 
 @Client.on_message(filters.text & filters.private & filters.regex(r"^https?://(www\.)?github\.com/"))
 async def handle_github_url(client: Client, message: Message):
+    import asyncio
     user_id = message.from_user.id
     user = await database.get_user(user_id)
     if not user:
@@ -53,7 +54,23 @@ async def handle_github_url(client: Client, message: Message):
         await status_msg.edit_text("<b>❌ Invalid GitHub URL</b>")
         return
 
-    scan = await github_client.scan_repository(parsed["owner"], parsed["repo"], parsed["branch"])
+    try:
+        # Wrap scan with 90s timeout to prevent infinite hang
+        scan = await asyncio.wait_for(
+            github_client.scan_repository(parsed["owner"], parsed["repo"], parsed["branch"]),
+            timeout=90,
+        )
+    except asyncio.TimeoutError:
+        await status_msg.edit_text(
+            "<b>❌ Scanning timed out!</b>\n\n"
+            "The repository may be too large or GitHub is slow right now.\n"
+            "Please try again in a moment."
+        )
+        return
+    except Exception as e:
+        await status_msg.edit_text(f"<b>❌ Scan error: {str(e)}</b>")
+        return
+
     if not scan.get("success"):
         await status_msg.edit_text(f"<b>❌ {scan.get('error', 'Scan failed')}</b>")
         return

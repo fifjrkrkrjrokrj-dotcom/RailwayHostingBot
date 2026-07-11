@@ -90,7 +90,15 @@ class DeploymentEngine:
         terminal.add_line(f"branch: {parsed['branch']}")
 
         terminal.add_line("cloning repository...")
-        scan_result = await github_client.scan_repository(parsed["owner"], parsed["repo"], parsed["branch"])
+        try:
+            scan_result = await asyncio.wait_for(
+                github_client.scan_repository(parsed["owner"], parsed["repo"], parsed["branch"]),
+                timeout=90,
+            )
+        except asyncio.TimeoutError:
+            terminal.add_error("scan timed out — repository may be too large or GitHub is slow")
+            return {"success": False, "error": "Repository scan timed out. Please try again.", "deployment_id": deployment_id}
+
 
         if not scan_result.get("success"):
             terminal.add_error(scan_result.get("error", "scan failed"))

@@ -11,6 +11,10 @@ from bot.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+# Timeouts
+_DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30)
+_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=120)  # ZIP can be large
+
 
 class GitHubClient:
     def __init__(self):
@@ -24,7 +28,10 @@ class GitHubClient:
 
     async def ensure_session(self):
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession(headers=self.headers)
+            self.session = aiohttp.ClientSession(
+                headers=self.headers,
+                timeout=_DEFAULT_TIMEOUT,
+            )
 
     async def close(self):
         if self.session and not self.session.closed:
@@ -36,17 +43,20 @@ class GitHubClient:
         if not match:
             return None
         owner, repo = match.group(1), match.group(2).replace(".git", "")
-        branch = match.group(3) or "main"
+        branch = match.group(3) or None  # None = auto-detect main/master
         return {"owner": owner, "repo": repo, "branch": branch}
 
     async def get_repo_info(self, owner: str, repo: str) -> Optional[dict]:
         await self.ensure_session()
         url = f"https://api.github.com/repos/{owner}/{repo}"
         try:
-            async with self.session.get(url) as resp:
+            async with self.session.get(url, timeout=_DEFAULT_TIMEOUT) as resp:
                 if resp.status == 200:
                     return await resp.json()
                 return None
+        except asyncio.TimeoutError:
+            logger.error(f"GitHub API timeout fetching repo info for {owner}/{repo}")
+            return None
         except Exception as e:
             logger.error(f"GitHub API error: {e}")
             return None
@@ -55,11 +65,14 @@ class GitHubClient:
         await self.ensure_session()
         url = f"https://api.github.com/repos/{owner}/{repo}/zipball/{branch}"
         try:
-            async with self.session.get(url) as resp:
+            async with self.session.get(url, timeout=_DOWNLOAD_TIMEOUT) as resp:
                 if resp.status == 200:
                     return await resp.read()
                 logger.error(f"Failed to download repo: {resp.status}")
                 return None
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout downloading repo ZIP for {owner}/{repo}@{branch}")
+            return None
         except Exception as e:
             logger.error(f"Download error: {e}")
             return None
@@ -68,10 +81,13 @@ class GitHubClient:
         await self.ensure_session()
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={branch}"
         try:
-            async with self.session.get(url) as resp:
+            async with self.session.get(url, timeout=_DEFAULT_TIMEOUT) as resp:
                 if resp.status == 200:
                     return await resp.json()
                 return []
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout listing repo contents {owner}/{repo}")
+            return []
         except Exception:
             return []
 
@@ -79,30 +95,63 @@ class GitHubClient:
         await self.ensure_session()
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={branch}"
         try:
-            async with self.session.get(url) as resp:
+            async with self.session.get(url, timeout=_DEFAULT_TIMEOUT) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("encoding") == "base64":
                         import base64
                         return base64.b64decode(data["content"]).decode("utf-8")
                 return None
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout getting file content {owner}/{repo}/{path}")
+            return None
         except Exception as e:
             logger.error(f"Failed to get file content: {e}")
             return None
 
-    async def scan_repository(self, owner: str, repo: str, branch: str = "main") -> dict:
+    async def _resolve_branch(self, owner: str, repo: str, branch: Optional[str], info: dict) -> str:
+        """
+        Resolve the correct branch name.
+        - If explicitly given in URL → use it directly.
+        - Otherwise → use repo's default_branch from API info.
+        - Fallback: try 'main', then 'master'.
+        """
+        if branch:
+            return branch
+        default = info.get("default_branch")
+        if default:
+            return default
+        # Final fallback
+        return "main"
+
+    async def scan_repository(self, owner: str, repo: str, branch: Optional[str] = None) -> dict:
         info = await self.get_repo_info(owner, repo)
         if not info:
-            return {"success": False, "error": "Repository not found"}
+            return {"success": False, "error": "Repository not found or GitHub API timeout. Please try again."}
 
         if info.get("private"):
             return {"success": False, "error": "Private repositories not supported"}
 
+        resolved_branch = await self._resolve_branch(owner, repo, branch, info)
+
         try:
-            zip_data = await self.download_repo_zip(owner, repo, branch)
+            zip_data = await self.download_repo_zip(owner, repo, resolved_branch)
+
+            # If resolved branch failed and we auto-detected, try the other common branch
+            if not zip_data and not branch:
+                fallback = "master" if resolved_branch == "main" else "main"
+                logger.warning(f"Branch '{resolved_branch}' download failed, trying '{fallback}'")
+                zip_data = await self.download_repo_zip(owner, repo, fallback)
+                if zip_data:
+                    resolved_branch = fallback
+
             if not zip_data:
-                return {"success": False, "error": "Failed to download repository"}
-            return await self._scan_zip_data(zip_data, owner, repo, branch)
+                return {"success": False, "error": f"Failed to download repository (branch: {resolved_branch}). The repo may be empty or the branch may not exist."}
+
+            return await self._scan_zip_data(zip_data, owner, repo, resolved_branch)
+        except asyncio.TimeoutError:
+            logger.exception(f"Scan timeout for {owner}/{repo}")
+            return {"success": False, "error": "Repository scan timed out. Please try again with a smaller repo."}
         except Exception as e:
             logger.exception(f"Scan error: {e}")
             return {"success": False, "error": str(e)}
