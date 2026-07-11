@@ -184,8 +184,7 @@ class RailwayClient:
             return None
 
     async def create_deployment(self, service_id: str, environment_id: str) -> Optional[str]:
-        # Try V2 first, fall back to V1
-        for field in ("serviceInstanceDeployV2", "serviceInstanceDeploy", "deploymentCreate"):
+        for field in ("serviceInstanceDeployV2", "serviceInstanceDeploy"):
             query = f"""
             mutation CreateDeployment($serviceId: String!, $environmentId: String!) {{
                 {field}(serviceId: $serviceId, environmentId: $environmentId)
@@ -501,15 +500,13 @@ class RailwayClient:
     async def delete_project(self, project_id: str) -> bool:
         query = """
         mutation DeleteProject($id: String!) {
-            projectDelete(id: $id) {
-                id
-            }
+            projectDelete(id: $id)
         }
         """
         variables = {"id": project_id}
         try:
-            await self._query(query, variables)
-            return True
+            res = await self._query(query, variables)
+            return bool(res.get("projectDelete", False))
         except Exception as e:
             logger.error(f"Failed to delete project: {e}")
             return False

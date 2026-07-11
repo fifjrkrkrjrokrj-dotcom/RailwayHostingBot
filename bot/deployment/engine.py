@@ -492,7 +492,9 @@ class DeploymentEngine:
         terminal = self.get_terminal(deployment_id)
         terminal.add_line("triggering repository update & redeploy...")
 
-        client = RailwayClient(dep["railway_token"])
+        # Try original token first
+        original_token = dep["railway_token"]
+        client = RailwayClient(original_token)
         try:
             new_dep_id = await client.create_deployment(dep["service_id"], dep["environment_id"])
             if new_dep_id:
@@ -502,14 +504,40 @@ class DeploymentEngine:
                 })
                 terminal.add_line(f"new deployment triggered: {new_dep_id[:8]}...")
                 terminal.add_line("building repository updates...")
+                await client.close()
                 return new_dep_id
-            return None
-        except Exception as e:
-            logger.error(f"Redeploy error: {e}")
-            terminal.add_error(f"redeploy failed: {str(e)}")
-            return None
-        finally:
             await client.close()
+        except Exception as e:
+            logger.warning(f"Redeploy on original token failed: {e}")
+            await client.close()
+            terminal.add_line("original token failed, attempting migration to new token...")
+
+        # Original token dead — try migrate then redeploy on new token
+        success = await self.migrate_deployment(deployment_id)
+        if not success:
+            terminal.add_error("redeploy failed — no available tokens")
+            return None
+
+        dep = await database.get_deployment(deployment_id)
+        if not dep:
+            return None
+        client = RailwayClient(dep["railway_token"])
+        try:
+            new_dep_id = await client.create_deployment(dep["service_id"], dep["environment_id"])
+            if new_dep_id:
+                await database.update_deployment(deployment_id, {
+                    "status": "deploying",
+                    "railway_deployment_id": new_dep_id,
+                })
+                terminal.add_line(f"redeploy on new token: {new_dep_id[:8]}...")
+                await client.close()
+                return new_dep_id
+            await client.close()
+        except Exception as e:
+            logger.error(f"Redeploy on migrated token failed: {e}")
+            terminal.add_error(f"redeploy on new token failed: {str(e)}")
+            return None
+        return None
 
     async def delete_deployment(self, deployment_id: str) -> bool:
         dep = await database.get_deployment(deployment_id)

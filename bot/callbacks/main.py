@@ -105,6 +105,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         "dom_delete_menu": cb_dom_delete_menu,
         "download_logs": cb_download_logs,
         "redeploy": cb_redeploy,
+        "redeploy_vars": cb_redeploy_vars,
         "rename_bot": cb_rename_bot,
     }
 
@@ -1936,6 +1937,40 @@ async def cb_redeploy(client: Client, query: CallbackQuery):
         asyncio.create_task(track_background_redeploy(client, query.message, user_id, dep["deployment_id"], new_dep_id))
     else:
         await query.message.edit_text("<b>❌ Failed to trigger redeployment on Railway.</b>", reply_markup=my_bot_keyboard(True, dep["deployment_id"]))
+
+
+async def cb_redeploy_vars(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    dep = await get_deployment_from_callback(query, user_id)
+    if not dep:
+        await query.answer("No active deployment found", show_alert=True)
+        return
+
+    await query.answer("🔄 Syncing variables & redeploying...")
+    await query.message.edit_text("<b>🔄 Syncing variables to Railway and redeploying...</b>")
+
+    # Sync current variables from DB to Railway
+    variables = dep.get("variables", {})
+    r_client = RailwayClient(dep["railway_token"])
+    try:
+        for key, value in variables.items():
+            await r_client.set_environment_variable(
+                dep["project_id"], dep["environment_id"], key, value,
+                service_id=dep["service_id"]
+            )
+    except Exception as e:
+        logger.warning(f"Variable sync failed during redeploy_vars: {e}")
+    finally:
+        await r_client.close()
+
+    new_dep_id = await deployment_engine.redeploy_deployment(dep["deployment_id"])
+    if new_dep_id:
+        asyncio.create_task(track_background_redeploy(client, query.message, user_id, dep["deployment_id"], new_dep_id))
+    else:
+        await query.message.edit_text(
+            "<b>❌ Failed to trigger redeployment.</b>\nAll tokens may be restricted.",
+            reply_markup=my_bot_keyboard(True, dep["deployment_id"])
+        )
 
 
 async def cb_rename_bot(client: Client, query: CallbackQuery):
