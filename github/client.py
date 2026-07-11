@@ -53,10 +53,19 @@ class GitHubClient:
             async with self.session.get(url, timeout=_DEFAULT_TIMEOUT) as resp:
                 if resp.status == 200:
                     return await resp.json()
-                return None
+                elif resp.status in (403, 429):
+                    # Rate limited or forbidden
+                    logger.warning(f"GitHub API rate limited ({resp.status}) for {owner}/{repo}")
+                    return {"_rate_limited": True, "_status": resp.status}
+                elif resp.status == 404:
+                    logger.warning(f"GitHub repo not found: {owner}/{repo}")
+                    return {"_not_found": True}
+                else:
+                    logger.error(f"GitHub API returned HTTP {resp.status} for {owner}/{repo}")
+                    return {"_error": True, "_status": resp.status}
         except asyncio.TimeoutError:
             logger.error(f"GitHub API timeout fetching repo info for {owner}/{repo}")
-            return None
+            return {"_timeout": True}
         except Exception as e:
             logger.error(f"GitHub API error: {e}")
             return None
@@ -129,8 +138,22 @@ class GitHubClient:
         if not info:
             return {"success": False, "error": "Repository not found or GitHub API timeout. Please try again."}
 
+        # Handle specific error cases from get_repo_info
+        if info.get("_rate_limited"):
+            return {
+                "success": False,
+                "error": "GitHub API rate limit reached (too many requests). "
+                          "Please set a GITHUB_TOKEN in bot config to increase limits, or try again in 1 hour."
+            }
+        if info.get("_timeout"):
+            return {"success": False, "error": "GitHub API timed out. Please try again in a moment."}
+        if info.get("_not_found"):
+            return {"success": False, "error": f"Repository '{owner}/{repo}' not found. Make sure the URL is correct and the repo is public."}
+        if info.get("_error"):
+            return {"success": False, "error": f"GitHub API error (HTTP {info.get('_status', '?')}). Please try again."}
+
         if info.get("private"):
-            return {"success": False, "error": "Private repositories not supported"}
+            return {"success": False, "error": "Private repositories not supported. Please make the repo public first."}
 
         resolved_branch = await self._resolve_branch(owner, repo, branch, info)
 
