@@ -34,7 +34,7 @@ class TokenManager:
 
     async def _fallback_token(self) -> Optional[dict]:
         all_tokens = await database.get_all_tokens()
-        active = [t for t in all_tokens if t.get("is_active") and t.get("current_deployments", 0) < 1]
+        active = [t for t in all_tokens if t.get("is_active") and t.get("credits", 0) > 0 and t.get("current_deployments", 0) < 1]
         if not active:
             return None
         active.sort(key=lambda x: x.get("priority", 0), reverse=True)

@@ -12,7 +12,7 @@ from typing import Optional
 from bot.config.settings import settings
 from bot.database.db import database
 from bot.utils.formatters import detect_framework, detect_startup_file, is_python_project, parse_env_content, format_timestamp
-from bot.utils.security import scan_zip_for_threats, validate_railway_token
+from bot.utils.security import scan_zip_for_threats, validate_railway_token, is_permanent_token_error
 from github.client import github_client
 from railway.client import RailwayClient
 from railway.token_manager import token_manager
@@ -166,8 +166,7 @@ class DeploymentEngine:
 
                 if variables:
                     terminal.add_line("setting environment variables...")
-                    for key, value in variables.items():
-                        await client.set_environment_variable(project_id, env_id, key, value, service_id=service_id)
+                    await client.set_environment_variables(project_id, env_id, variables, service_id=service_id)
 
                 terminal.add_line("generating railway public domain...")
                 domain_doc = await client.create_service_domain(service_id, env_id)
@@ -227,7 +226,8 @@ class DeploymentEngine:
                     await client.delete_project(project_id)
                 except Exception:
                     pass
-                await database.disable_token(token_doc["token"])
+                if is_permanent_token_error(str(e)):
+                    await database.disable_token(token_doc["token"])
                 await token_manager.release_token(token_doc["token"])
                 await client.close()
                 continue
@@ -322,8 +322,7 @@ class DeploymentEngine:
 
                 if variables:
                     terminal.add_line("setting environment variables...")
-                    for key, value in variables.items():
-                        await client.set_environment_variable(project_id, env_id, key, value, service_id=service_id)
+                    await client.set_environment_variables(project_id, env_id, variables, service_id=service_id)
 
                 extract_path = os.path.join(settings.TEMP_DIR, deployment_id)
                 os.makedirs(extract_path, exist_ok=True)
@@ -433,7 +432,8 @@ class DeploymentEngine:
                     pass
                 if extract_path:
                     shutil.rmtree(extract_path, ignore_errors=True)
-                await database.disable_token(token_doc["token"])
+                if is_permanent_token_error(str(e)):
+                    await database.disable_token(token_doc["token"])
                 await token_manager.release_token(token_doc["token"])
                 await client.close()
                 continue
@@ -625,8 +625,8 @@ class DeploymentEngine:
                 await new_client.update_service_instance_region(service_id, env_id, region_code)
 
                 # Set variables
-                for key, value in dep.get("variables", {}).items():
-                    await new_client.set_environment_variable(project_id, env_id, key, value, service_id=service_id)
+                if dep.get("variables"):
+                    await new_client.set_environment_variables(project_id, env_id, dep["variables"], service_id=service_id)
 
                 # Extract and deploy using Railway CLI
                 extract_path = os.path.join(settings.TEMP_DIR, f"migrate_{deployment_id}")
@@ -686,8 +686,8 @@ class DeploymentEngine:
                 await new_client.update_service_instance_region(service_id, env_id, region_code)
 
                 # Set variables
-                for key, value in dep.get("variables", {}).items():
-                    await new_client.set_environment_variable(project_id, env_id, key, value, service_id=service_id)
+                if dep.get("variables"):
+                    await new_client.set_environment_variables(project_id, env_id, dep["variables"], service_id=service_id)
 
                 dep_id = await new_client.create_deployment(service_id, env_id)
                 if not dep_id:

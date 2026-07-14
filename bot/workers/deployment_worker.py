@@ -4,6 +4,7 @@ from bot.database.db import database
 from bot.deployment.engine import deployment_engine
 from railway.token_manager import token_manager
 from railway.client import RailwayClient
+from bot.utils.security import is_permanent_token_error
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +45,12 @@ class DeploymentWorker:
         for dep in all_deployments:
             try:
                 token_doc = await database.get_railway_token(dep["railway_token"])
-                if not token_doc or not token_doc.get("is_active"):
-                    logger.warning(f"Token invalid for deployment {dep['deployment_id']}, migrating...")
-                    await deployment_engine.migrate_deployment(dep["deployment_id"])
+                if not token_doc or not token_doc.get("is_active") or token_doc.get("credits", 5.0) <= 0:
+                    logger.warning(f"Token invalid or exhausted for deployment {dep['deployment_id']}, migrating...")
+                    success = await deployment_engine.migrate_deployment(dep["deployment_id"])
+                    if not success:
+                        await database.update_deployment(dep["deployment_id"], {"status": "suspended"})
+                        logger.error(f"Migration failed for deployment {dep['deployment_id']}, marked as suspended")
                     continue
                 client = RailwayClient(dep["railway_token"])
                 try:
@@ -88,19 +92,19 @@ class DeploymentWorker:
                 # ── Step 1: Validate token ──────────────────────────────
                 try:
                     valid = await asyncio.wait_for(client.validate_token(), timeout=20)
+                    if not valid:
+                        if token_doc.get("is_active"):
+                            logger.warning(f"Token {token_short} is invalid/restricted — disabling")
+                            await database.disable_token(token)
+                            await owner_log.send_log(
+                                "token_restricted",
+                                token=token_short,
+                                reason="Token validation failed (invalid, expired, or restricted by Railway)",
+                                status="DISABLED",
+                            )
+                        continue
                 except asyncio.TimeoutError:
-                    valid = False
-
-                if not valid:
-                    if token_doc.get("is_active"):
-                        logger.warning(f"Token {token_short} is invalid/restricted — disabling")
-                        await database.disable_token(token)
-                        await owner_log.send_log(
-                            "token_restricted",
-                            token=token_short,
-                            reason="Token validation failed (invalid, expired, or restricted by Railway)",
-                            status="DISABLED",
-                        )
+                    logger.warning(f"Timeout validating token {token_short} — skipping rotation check for now")
                     continue
 
                 # ── Step 2: Check credits ───────────────────────────────

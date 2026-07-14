@@ -77,8 +77,7 @@ async def handle_single_variable(client: Client, message: Message):
             status_msg = await message.reply_text("<b>⚙ Syncing variables to Railway...</b>")
             r_client = RailwayClient(dep["railway_token"])
             try:
-                for k, v in parsed_vars.items():
-                    await r_client.set_environment_variable(dep["project_id"], dep["environment_id"], k, v, service_id=dep["service_id"])
+                await r_client.set_environment_variables(dep["project_id"], dep["environment_id"], parsed_vars, service_id=dep["service_id"])
                 new_dep_id = await r_client.create_deployment(dep["service_id"], dep["environment_id"])
                 if new_dep_id:
                     await database.update_deployment(target_dep_id, {"railway_deployment_id": new_dep_id})
@@ -129,8 +128,7 @@ async def handle_single_variable(client: Client, message: Message):
     status_msg = await message.reply_text("<b>⚙ Syncing variables to Railway...</b>")
     r_client = RailwayClient(dep["railway_token"])
     try:
-        for k, v in parsed_vars.items():
-            await r_client.set_environment_variable(dep["project_id"], dep["environment_id"], k, v, service_id=dep["service_id"])
+        await r_client.set_environment_variables(dep["project_id"], dep["environment_id"], parsed_vars, service_id=dep["service_id"])
         
         # Trigger redeployment to apply new variables
         new_dep_id = await r_client.create_deployment(dep["service_id"], dep["environment_id"])
@@ -177,8 +175,7 @@ async def handle_env_upload(client: Client, message: Message):
         await status_msg.edit_text("<b>⚙ Syncing variables to Railway...</b>")
         r_client = RailwayClient(dep["railway_token"])
         try:
-            for k, v in parsed.items():
-                await r_client.set_environment_variable(dep["project_id"], dep["environment_id"], k, v, service_id=dep["service_id"])
+            await r_client.set_environment_variables(dep["project_id"], dep["environment_id"], parsed, service_id=dep["service_id"])
             
             # Trigger redeployment to apply variables
             new_dep_id = await r_client.create_deployment(dep["service_id"], dep["environment_id"])

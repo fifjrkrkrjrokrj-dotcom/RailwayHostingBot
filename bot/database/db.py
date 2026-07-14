@@ -123,6 +123,7 @@ class Database:
         return await self.db.railway_tokens.find_one_and_update(
             {
                 "is_active": True, "is_available": True, "is_restricted": {"$ne": True},
+                "credits": {"$gt": 0},
                 "$expr": {"$lt": ["$current_deployments", "$max_deployments"]},
             },
             {"$inc": {"current_deployments": 1}},

@@ -19,6 +19,7 @@ from bot.utils.formatters import format_uptime, format_variables_for_display
 from railway.token_manager import token_manager
 from railway.client import RailwayClient
 from github.client import github_client
+from bot.utils.security import is_permanent_token_error
 
 
 async def get_deployment_from_callback(query, user_id: int):
@@ -921,11 +922,11 @@ async def cb_admin_api_health(client: Client, query: CallbackQuery):
                 await r_client.close()
             except asyncio.TimeoutError:
                 token_results.append(("⏳", token_preview, "TIMEOUT"))
-                dead_tokens.append(tdoc)
                 await r_client.close()
             except Exception as e:
                 token_results.append(("❌", token_preview, str(e)[:60]))
-                dead_tokens.append(tdoc)
+                if is_permanent_token_error(str(e)):
+                    dead_tokens.append(tdoc)
                 await r_client.close()
 
         results.append(("🚂", f"Railway Tokens ({len(tokens)})", f"{len([t for t in tokens if t.get('is_active') and not t.get('is_restricted')])} active"))
@@ -1962,9 +1963,9 @@ async def cb_redeploy_vars(client: Client, query: CallbackQuery):
     variables = dep.get("variables", {})
     r_client = RailwayClient(dep["railway_token"])
     try:
-        for key, value in variables.items():
-            await r_client.set_environment_variable(
-                dep["project_id"], dep["environment_id"], key, value,
+        if variables:
+            await r_client.set_environment_variables(
+                dep["project_id"], dep["environment_id"], variables,
                 service_id=dep["service_id"]
             )
     except Exception as e:

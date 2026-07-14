@@ -76,3 +76,19 @@ def is_rate_limited(user_id: int, cache) -> bool:
         return True
     cache.incr(key)
     return False
+
+
+def is_permanent_token_error(error_msg: str) -> bool:
+    err_lower = error_msg.lower()
+    permanent_indicators = [
+        "invalid railway token",
+        "permissionerror",
+        "workspace has been restricted",
+        "attach a payment method",
+        "payment method",
+        "restricted by railway",
+        "token expired",
+        "invalid token"
+    ]
+    return any(indicator in err_lower for indicator in permanent_indicators)
+

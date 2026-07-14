@@ -4,6 +4,7 @@ from bot.database.db import database
 from railway.client import RailwayClient
 from bot.deployment.engine import deployment_engine
 from bot.services.log_service import owner_log
+from bot.utils.security import is_permanent_token_error
 
 logger = logging.getLogger(__name__)
 
@@ -39,24 +40,48 @@ class CleanupService:
         r_client = RailwayClient(token_doc["token"])
         try:
             info = await asyncio.wait_for(r_client.get_account_info(), timeout=15)
-            if info.get("me", {}).get("id"):
+            if not info.get("me", {}).get("id"):
+                raise Exception("Invalid token response")
+            
+            workspaces = info.get("me", {}).get("workspaces", [])
+            credits = 5.0
+            if workspaces:
+                customer = workspaces[0].get("customer", {})
+                credits = customer.get("remainingUsageCreditBalance")
+                if credits is None:
+                    credit_bal = customer.get("creditBalance")
+                    credits = credit_bal if credit_bal is not None else 5.0
+            if credits <= 0:
+                raise Exception("Workspace restricted due to credit exhaustion")
+            return True
+        except Exception as e:
+            if is_permanent_token_error(str(e)) or "Invalid token response" in str(e) or "credit exhaustion" in str(e):
+                logger.warning(f"Token {token_doc['token'][:12]}... is DEAD ({e}), disabling and migrating")
+                await database.disable_token(token_doc["token"])
+                deps = await database.db.deployments.find({"railway_token": token_doc["token"]}).to_list(None)
+                for dep in deps:
+                    try:
+                        success = await deployment_engine.migrate_deployment(dep["deployment_id"])
+                        if success:
+                            await owner_log.send_log("token_restricted", {
+                                "token": f"{token_doc['token'][:12]}...",
+                                "deployment_id": dep["deployment_id"][:8],
+                                "reason": "dead token - auto migrated",
+                            })
+                        else:
+                            await database.update_deployment(dep["deployment_id"], {"status": "suspended"})
+                            await owner_log.send_log("token_restricted_failed", {
+                                "token": f"{token_doc['token'][:12]}...",
+                                "deployment_id": dep["deployment_id"][:8],
+                                "reason": "dead token - migration failed, marked as suspended",
+                            })
+                    except Exception as migration_err:
+                        logger.error(f"Migration failed for {dep['deployment_id']}: {migration_err}")
+                        await database.update_deployment(dep["deployment_id"], {"status": "suspended"})
+                return False
+            else:
+                logger.warning(f"Transient health check error for token {token_doc['token'][:12]}...: {e}")
                 return True
-            raise Exception("Invalid token response")
-        except Exception:
-            logger.warning(f"Token {token_doc['token'][:12]}... is DEAD, disabling and migrating")
-            await database.disable_token(token_doc["token"])
-            deps = await database.db.deployments.find({"railway_token": token_doc["token"]}).to_list(None)
-            for dep in deps:
-                try:
-                    await deployment_engine.migrate_deployment(dep["deployment_id"])
-                    await owner_log.send_log("token_restricted", {
-                        "token": f"{token_doc['token'][:12]}...",
-                        "deployment_id": dep["deployment_id"][:8],
-                        "reason": "dead token - auto migrated",
-                    })
-                except Exception as e:
-                    logger.error(f"Migration failed for {dep['deployment_id']}: {e}")
-            return False
         finally:
             await r_client.close()
 

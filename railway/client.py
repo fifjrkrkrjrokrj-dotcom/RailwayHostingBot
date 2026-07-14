@@ -458,6 +458,28 @@ class RailwayClient:
             logger.error(f"Failed to set variable: {e}")
             return False
 
+    async def set_environment_variables(self, project_id: str, environment_id: str, variables: dict, service_id: str = None) -> bool:
+        query = """
+        mutation VariableCollectionUpsert($input: VariableCollectionUpsertInput!) {
+            variableCollectionUpsert(input: $input)
+        }
+        """
+        input_data = {
+            "projectId": project_id,
+            "environmentId": environment_id,
+            "variables": variables
+        }
+        if service_id:
+            input_data["serviceId"] = service_id
+        payload_vars = {"input": input_data}
+        try:
+            res = await self._query(query, payload_vars)
+            return bool(res.get("variableCollectionUpsert"))
+        except Exception as e:
+            logger.error(f"Failed to set bulk variables: {e}")
+            return False
+
+
     async def delete_environment_variable(self, project_id: str, environment_id: str, name: str, service_id: str = None) -> bool:
         query = """
         mutation DeleteVariable($input: VariableDeleteInput!) {
